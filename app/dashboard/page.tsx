@@ -62,23 +62,34 @@ export default async function DashboardPage() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                className="flex flex-col justify-between p-5 border rounded-xl shadow-sm bg-white hover:shadow-md transition-shadow"
+                className="flex flex-col justify-between p-5 border rounded-xl shadow-sm bg-white hover:shadow-md transition-shadow group"
               >
-                <div>
-                  <h3 className="font-bold text-lg mb-2">{project.title}</h3>
-                  <p className="text-sm text-gray-500 mb-6">
+                {/* 1. Zone principale cliquable (mène à la frise) */}
+                <Link
+                  href={`/dashboard/projects/${project.id}`}
+                  className="block flex-grow mb-4"
+                >
+                  <h3 className="font-bold text-lg mb-2 group-hover:text-blue-600 transition-colors">
+                    {project.title}
+                  </h3>
+                  <p className="text-sm text-gray-500 mb-3">
                     Créé le :{" "}
                     {new Date(project.created_at).toLocaleDateString("fr-FR")}
                   </p>
-                </div>
-
-                {/* NOUVEAU : Bouton d'upload spécifique à ce projet */}
-                <Link
-                  href={`/dashboard/upload?projectId=${project.id}`}
-                  className="text-center w-full py-2 bg-blue-50 text-blue-600 font-medium rounded-lg border border-blue-200 hover:bg-blue-100 transition-colors"
-                >
-                  + Ajouter un brouillon
+                  <span className="text-sm text-blue-600 font-medium">
+                    Voir l'historique →
+                  </span>
                 </Link>
+
+                {/* 2. Bouton d'action rapide (Upload) */}
+                <div className="pt-4 border-t mt-auto">
+                  <Link
+                    href={`/dashboard/upload?projectId=${project.id}`}
+                    className="block text-center w-full py-2 bg-blue-50 text-blue-600 font-medium rounded-lg border border-blue-200 hover:bg-blue-100 transition-colors"
+                  >
+                    + Ajouter un brouillon
+                  </Link>
+                </div>
               </div>
             ))}
           </div>
