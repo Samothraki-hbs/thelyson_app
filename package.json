@@ -11,6 +11,9 @@
   "dependencies": {
     "@clerk/nextjs": "^7.9.7",
     "@supabase/supabase-js": "^2.117.2",
+    "jspdf": "^4.2.1",
+    "jszip": "^3.10.2",
+    "jzip": "^1.0.0",
     "next": "16.3.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
