@@ -21,6 +21,7 @@ export default function NewProjectPage() {
 
     try {
       const token = await getToken();
+      if (!token) throw new Error("Veuillez vous reconnecter.");
       const supabase = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -31,11 +32,28 @@ export default function NewProjectPage() {
         },
       );
 
-      // Insertion dans la table projects
+      // Lire le rôle enregistré dans le profil de l'utilisateur connecté.
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", userId)
+        .single();
+
+      if (profileError) throw profileError;
+      if (!profile || (profile.role !== "Auteur" && profile.role !== "Editeur")) {
+        throw new Error("Veuillez compléter votre profil avant de créer un projet.");
+      }
+
+      const creator =
+        profile.role === "Editeur"
+          ? { publisher_id: userId }
+          : { author_id: userId };
+
+      // Assigner le créateur à la colonne correspondant à son rôle.
       const { error } = await supabase.from("projects").insert([
         {
           title: title.trim(),
-          author_id: userId,
+          ...creator,
         },
       ]);
 
@@ -49,9 +67,11 @@ export default function NewProjectPage() {
       setTimeout(() => {
         router.push("/dashboard/upload");
       }, 1500);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      setStatus(`Erreur : ${error.message}`);
+      setStatus(
+        `Erreur : ${error instanceof Error ? error.message : "Impossible de créer le projet."}`,
+      );
       setIsSubmitting(false);
     }
   };
@@ -64,7 +84,7 @@ export default function NewProjectPage() {
         <form onSubmit={handleCreateProject} className="flex flex-col gap-6">
           <div>
             <label className="block text-sm font-medium mb-2 text-gray-700">
-              Titre de l'œuvre :
+              Titre de l’œuvre :
             </label>
             <input
               type="text"
