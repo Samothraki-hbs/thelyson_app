@@ -58,8 +58,9 @@ function UploadForm() {
         .replace(/\s+/g, "-")
         .toLowerCase();
 
-      const storagePath = `${userId}/${safeFileName}`;
-
+      // AJOUT : Génération d'un préfixe unique basé sur le temps
+      const timestamp = Date.now();
+      const storagePath = `${prefilledProjectId}/${timestamp}-${safeFileName}`;
       // 3. Envoi vers le bucket Supabase
       setStatus("Upload du document dans le coffre-fort...");
       const { error: uploadError } = await supabase.storage
@@ -76,7 +77,9 @@ function UploadForm() {
           {
             project_id: prefilledProjectId,
             storage_path: storagePath,
+            file_name: file.name,
             file_hash: fileHash,
+            created_at: new Date().toISOString(),
             // blockchain_tx_id est vide pour l'instant
           },
         ])

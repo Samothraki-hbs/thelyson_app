@@ -27,7 +27,7 @@ export default async function DashboardPage() {
   const { data: projects } = await supabase
     .from("projects")
     .select("*")
-    .eq("author_id", userId)
+    .or(`author_id.eq.${userId},publisher_id.eq.${userId}`)
     .order("created_at", { ascending: false });
 
   return (

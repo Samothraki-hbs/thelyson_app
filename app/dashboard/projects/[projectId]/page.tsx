@@ -6,6 +6,7 @@ import { useAuth } from "@clerk/nextjs";
 import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { jsPDF } from "jspdf";
+import InviteCollaborator from "@/components/InviteCollaborator";
 import JSZip from "jszip"; // <-- CETTE LIGNE EST INDISPENSABLE
 // NOUVEAU : Typage de la promesse
 export default function ProjectTimeline({
@@ -22,6 +23,8 @@ export default function ProjectTimeline({
   const [versions, setVersions] = useState<any[]>([]);
   const [project, setProject] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [author, setAuthor] = useState<any>(null);
+  const [publisher, setPublisher] = useState<any>(null);
 
   // NOUVEAU : Fonction pour générer le lien de téléchargement sécurisé
   const handleDownload = async (storagePath: string) => {
@@ -216,11 +219,32 @@ export default function ProjectTimeline({
         // Utilisation du projectId déballé
         const { data: projectData } = await supabase
           .from("projects")
-          .select("title")
+          .select("title, author_id, publisher_id")
           .eq("id", projectId)
           .single();
 
         if (projectData) setProject(projectData);
+
+        const idsToFetch = [
+          projectData?.author_id,
+          projectData?.publisher_id,
+        ].filter(Boolean);
+
+        console.log("IDs recherchés :", idsToFetch); // DEBOGAGE 1
+        if (idsToFetch.length > 0) {
+          const { data: profiles } = await supabase
+            .from("profiles")
+            .select("id, full_name, company_name")
+            .in("id", idsToFetch as string[]);
+
+          console.log("Profils trouvés :", profiles); // DEBOGAGE 2
+          if (profiles) {
+            setAuthor(profiles.find((p) => p.id === projectData?.author_id));
+            setPublisher(
+              profiles.find((p) => p.id === projectData?.publisher_id),
+            );
+          }
+        }
 
         // Utilisation du projectId déballé
         const { data: versionsData } = await supabase
@@ -258,7 +282,43 @@ export default function ProjectTimeline({
           </h1>
         </div>
 
+        {/* NOUVEAU : Encart Collaborateurs */}
+        <div className="flex gap-8 mb-12 p-5 bg-gray-50 border rounded-xl shadow-sm">
+          <div>
+            <span className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">
+              Auteur
+            </span>
+            <span className="font-medium text-gray-900 text-lg">
+              {author
+                ? author.full_name || author.company_name
+                : "Chargement..."}
+            </span>
+          </div>
+          <div className="w-px bg-gray-200"></div>
+          // moment qu'il faut regarder pour la question de l'éditeur / auteur
+          <div>
+            <span className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">
+              Éditeur
+            </span>
+            <span className="font-medium text-lg">
+              {publisher ? (
+                <span className="text-gray-900">
+                  {publisher.company_name || publisher.full_name}
+                </span>
+              ) : (
+                <span className="text-gray-400 italic">
+                  En attente d'association
+                </span>
+              )}
+            </span>
+          </div>
+        </div>
+
         <div className="flex gap-3">
+          {/* NOUVEAU : Bouton d'invitation (caché si le binôme est complet) */}
+          {project && (!project.author_id || !project.publisher_id) && (
+            <InviteCollaborator projectId={projectId} />
+          )}
           {/* NOUVEAU BOUTON TELECHARGER TOUT */}
           {versions.length > 0 && (
             <button
@@ -305,7 +365,7 @@ export default function ProjectTimeline({
                 <div className="bg-white p-5 rounded-xl border shadow-sm hover:shadow-md transition">
                   <div className="flex justify-between items-start mb-2">
                     <h3 className="font-bold text-lg text-gray-900">
-                      Version {versions.length - index}
+                      {version.file_name || `Version ${index + 1}`}
                     </h3>
                     <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
                       {date}
