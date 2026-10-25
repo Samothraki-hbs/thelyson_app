@@ -78,6 +78,9 @@ export default function PendingInvitations() {
       );
 
       // Actualiser aussi les projets du tableau de bord.
+
+      window.dispatchEvent(new Event("thelyson:invitations-updated"));
+
       router.refresh();
     } catch {
       setError("Impossible de traiter votre réponse. Réessayez.");
