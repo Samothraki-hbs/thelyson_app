@@ -3,172 +3,430 @@
 import { useState, Suspense } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { createClient } from "@supabase/supabase-js";
-import { useSearchParams, useRouter } from "next/navigation";
-// NOUVEAU : Import de notre Server Action Tatum
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+
+import { encryptManuscript } from "@/utils/manuscriptCrypto";
+
+import { getLocalIdentity, createLocalIdentity } from "@/utils/localCryptoKeys";
+
+import {
+  getMyRegisteredPublicKey,
+  registerMyPublicKey,
+} from "@/app/actions/cryptoKeys";
+
+import { saveEncryptedVersion } from "@/app/actions/encryptedVersions";
+
+import {
+  getDecryptedManuscript,
+  saveBlobToComputer,
+  type DownloadableVersion,
+} from "@/utils/downloadEncryptedManuscript";
+
 import { anchorDocumentToBlockchain } from "@/app/actions/anchor";
 
-// 1. La fonction de hachage cryptographique
-async function calculateSHA256(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashHex = hashArray
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  return hashHex;
-}
+type Status = {
+  type: "info" | "success" | "warning" | "error";
+  message: string;
+};
+
+const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 function UploadForm() {
   const { getToken, userId } = useAuth();
   const searchParams = useSearchParams();
-  const router = useRouter();
 
-  const prefilledProjectId = searchParams.get("projectId");
+  const projectId = searchParams.get("projectId");
 
   const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<string>("");
   const [isUploading, setIsUploading] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+
+  const [status, setStatus] = useState<Status | null>(null);
+
+  const [lastVersion, setLastVersion] = useState<DownloadableVersion | null>(
+    null,
+  );
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!file || !userId || !prefilledProjectId) {
-      setStatus("Erreur : Fichier manquant ou ID du projet introuvable.");
+
+    if (!file || !userId || !projectId || isUploading) {
+      return;
+    }
+
+    if (!/\.(pdf|docx)$/i.test(file.name)) {
+      setStatus({
+        type: "error",
+        message: "Seuls les fichiers PDF et DOCX sont acceptés.",
+      });
+      return;
+    }
+
+    if (file.size === 0 || file.size > MAX_FILE_SIZE) {
+      setStatus({
+        type: "error",
+        message:
+          "Le fichier doit être non vide et ne pas dépasser 20 Mo pour ce test.",
+      });
       return;
     }
 
     setIsUploading(true);
-    setStatus("Calcul de l'empreinte et sécurisation en cours...");
+    setLastVersion(null);
+
+    setStatus({
+      type: "info",
+      message: "Préparation de votre coffre-fort...",
+    });
 
     try {
       const token = await getToken();
+
+      if (!token) {
+        throw new Error("Veuillez vous reconnecter.");
+      }
+
       const supabase = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        { global: { headers: { Authorization: `Bearer ${token}` } } },
+        {
+          global: {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        },
       );
 
-      // 1. Calcul du Hash avant l'envoi
-      const fileHash = await calculateSHA256(file);
-      console.log("Empreinte unique du document :", fileHash);
+      // 1. Vérifier l'identité cryptographique.
+      const registeredKey = await getMyRegisteredPublicKey();
 
-      // 2. Nettoyage du nom du fichier
-      const safeFileName = file.name
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/\s+/g, "-")
-        .toLowerCase();
+      let identity = await getLocalIdentity(userId);
 
-      // AJOUT : Génération d'un préfixe unique basé sur le temps
-      const timestamp = Date.now();
-      const storagePath = `${prefilledProjectId}/${timestamp}-${safeFileName}`;
-      // 3. Envoi vers le bucket Supabase
-      setStatus("Upload du document dans le coffre-fort...");
+      if (registeredKey) {
+        if (
+          !identity ||
+          identity.publicKeyJwk.n !== registeredKey.n ||
+          identity.publicKeyJwk.e !== registeredKey.e
+        ) {
+          throw new Error(
+            "Ce navigateur ne possède pas la clé privée correspondant à votre coffre-fort.",
+          );
+        }
+      } else {
+        identity = identity || (await createLocalIdentity(userId));
+
+        const registration = await registerMyPublicKey(identity.publicKeyJwk);
+
+        if (!registration.success) {
+          throw new Error(registration.error);
+        }
+      }
+
+      if (!identity) {
+        throw new Error(
+          "Impossible de préparer votre identité cryptographique.",
+        );
+      }
+
+      // 2. Chiffrer le manuscrit localement.
+      setStatus({
+        type: "info",
+        message: "Chiffrement du manuscrit sur votre appareil...",
+      });
+
+      const { encryptedBlob, encryptionKey, ivBase64, fileHash } =
+        await encryptManuscript(file);
+
+      // 3. Protéger la clé AES avec la clé publique.
+      const publicKey = await crypto.subtle.importKey(
+        "jwk",
+        identity.publicKeyJwk,
+        {
+          name: "RSA-OAEP",
+          hash: "SHA-256",
+        },
+        true,
+        ["wrapKey"],
+      );
+
+      const wrappedBuffer = await crypto.subtle.wrapKey(
+        "raw",
+        encryptionKey,
+        publicKey,
+        "RSA-OAEP",
+      );
+
+      const wrappedKeyBase64 = btoa(
+        String.fromCharCode(...new Uint8Array(wrappedBuffer)),
+      );
+
+      // 4. Créer un nom de stockage opaque.
+      // Le nom réel reste dans les métadonnées de la version.
+      const storagePath = `${projectId}/${crypto.randomUUID()}.enc`;
+
+      // 5. Envoyer UNIQUEMENT le fichier chiffré.
+      setStatus({
+        type: "info",
+        message: "Enregistrement du document chiffré...",
+      });
+
       const { error: uploadError } = await supabase.storage
         .from("manuscripts")
-        .upload(storagePath, file, { upsert: false });
+        .upload(storagePath, encryptedBlob, {
+          contentType: "application/octet-stream",
+          upsert: false,
+        });
 
       if (uploadError) throw uploadError;
 
-      // 4. MODIFICATION : Enregistrement initial en base pour obtenir l'ID
-      setStatus("Préparation du certificat...");
-      const { data: versionData, error: dbError } = await supabase
-        .from("versions")
-        .insert([
-          {
-            project_id: prefilledProjectId,
-            storage_path: storagePath,
-            file_name: file.name,
-            file_hash: fileHash,
-            created_at: new Date().toISOString(),
-            // blockchain_tx_id est vide pour l'instant
-          },
-        ])
-        .select(); // Le .select() est crucial pour récupérer l'ID généré par Supabase
-
-      if (dbError) throw dbError;
-
-      const nouvelleVersionId = versionData[0].id;
-
-      // 5. MODIFICATION : Ancrage sur la blockchain via Tatum (Server Action)
-      setStatus("Ancrage sur la blockchain Polygon en cours...");
-      const anchorResult = await anchorDocumentToBlockchain(
-        nouvelleVersionId,
+      // 6. Enregistrer la version et sa clé chiffrée.
+      const saved = await saveEncryptedVersion({
+        projectId,
+        storagePath,
+        fileName: file.name,
         fileHash,
-      );
+        ivBase64,
+        wrappedKeyBase64,
+      });
 
-      if (!anchorResult.success) {
-        throw new Error(`Erreur d'ancrage : ${anchorResult.error}`);
+      if (!saved.success) {
+        throw new Error(
+          `${saved.error} Le fichier chiffré a été envoyé, mais son enregistrement n'est pas terminé.`,
+        );
       }
 
-      // 6. Succès et redirection
-      setStatus(`Fichier sécurisé et ancré ! Réf TX : ${anchorResult.txId}`);
+      const version: DownloadableVersion = {
+        id: saved.versionId,
+        storage_path: storagePath,
+        file_name: file.name,
+        file_hash: fileHash,
+        encryption_iv: ivBase64,
+        encryption_version: 1,
+      };
 
-      // Redirection retardée pour laisser le temps de lire le message
-      setTimeout(() => router.push("/dashboard"), 3000);
-    } catch (error: any) {
-      console.error(error);
-      setStatus(`Erreur : ${error.message}`);
+      setLastVersion(version);
+
+      // 7. Ancrer le SHA-256 ORIGINAL sur Polygon.
+      setStatus({
+        type: "info",
+        message: "Ancrage blockchain en cours...",
+      });
+
+      try {
+        const anchorResult = await anchorDocumentToBlockchain(
+          saved.versionId,
+          fileHash,
+        );
+
+        if (!anchorResult.success) {
+          throw new Error(anchorResult.error || "Ancrage non confirmé.");
+        }
+
+        setStatus({
+          type: "success",
+          message:
+            "Manuscrit chiffré et enregistré. Transaction blockchain transmise. Vous pouvez maintenant tester le téléchargement.",
+        });
+      } catch {
+        setStatus({
+          type: "warning",
+          message:
+            "Le manuscrit chiffré est enregistré, mais l'ancrage blockchain n'a pas été confirmé. Ne redéposez pas le document : son ancrage devra être vérifié ou relancé.",
+        });
+      }
+    } catch (error: unknown) {
+      console.error("Erreur de dépôt :", error);
+
+      setStatus({
+        type: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Impossible de déposer le manuscrit.",
+      });
+    } finally {
       setIsUploading(false);
     }
   };
 
-  if (!prefilledProjectId) {
+  // TEST : restituer le document original depuis Supabase.
+  const handleTestDownload = async () => {
+    if (!lastVersion || !userId || isTesting) return;
+
+    setIsTesting(true);
+
+    try {
+      const originalBlob = await getDecryptedManuscript(
+        lastVersion,
+        userId,
+        getToken,
+      );
+
+      saveBlobToComputer(originalBlob, lastVersion.file_name);
+
+      setStatus({
+        type: "success",
+        message:
+          "Test réussi : le manuscrit a été téléchargé, déchiffré localement et son empreinte SHA-256 a été vérifiée.",
+      });
+    } catch (error: unknown) {
+      setStatus({
+        type: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Échec du test de déchiffrement.",
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  if (!projectId) {
     return (
-      <div className="p-10 text-center text-red-600">
-        Veuillez sélectionner un projet depuis le tableau de bord pour uploader
-        un fichier.
+      <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
+        Sélectionnez d'abord un projet depuis votre tableau de bord.
       </div>
     );
   }
 
   return (
-    <div className="bg-white p-6 rounded-xl border shadow-sm">
-      <form onSubmit={handleUpload} className="flex flex-col gap-6">
+    <section className="rounded-xl border border-zinc-200 bg-white">
+      <div className="border-b border-zinc-100 px-6 py-5">
+        <h2 className="text-sm font-semibold text-zinc-900">
+          Nouvelle version
+        </h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          Votre document sera chiffré avant son envoi.
+        </p>
+      </div>
+
+      <form onSubmit={handleUpload} className="space-y-6 p-6">
         <div>
-          <label className="block text-sm font-medium mb-2">
-            Fichier (.pdf ou .docx) :
+          <label
+            htmlFor="manuscript-file"
+            className="mb-3 block text-sm font-medium text-zinc-800"
+          >
+            Choisir un manuscrit
           </label>
+
           <input
+            id="manuscript-file"
             type="file"
             accept=".pdf,.docx"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            className="w-full border p-2 rounded"
+            disabled={isUploading}
+            onChange={(e) => {
+              setFile(e.target.files?.[0] || null);
+              setLastVersion(null);
+              setStatus(null);
+            }}
+            className="block w-full rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 file:mr-4 file:rounded-md file:border-0 file:bg-white file:px-3 file:py-2 file:text-sm file:font-medium file:text-zinc-700 hover:file:bg-zinc-100"
           />
+          <p className="mt-2 text-xs text-zinc-400">
+            PDF ou DOCX, 20 Mo maximum pour ce prototype.
+          </p>
+        </div>
+
+        <div className="flex items-start gap-3 rounded-lg border border-emerald-100 bg-emerald-50/60 p-4">
+          <span className="text-emerald-700">◈</span>
+
+          <p className="text-xs leading-5 text-emerald-800">
+            <strong>Protection automatique.</strong> Le manuscrit sera chiffré
+            sur votre appareil. Seule sa version chiffrée sera envoyée au
+            stockage.
+          </p>
         </div>
 
         <button
           type="submit"
           disabled={!file || isUploading}
-          className="bg-blue-600 text-white p-3 rounded-lg font-medium disabled:bg-gray-300 hover:bg-blue-700 transition-colors"
+          className="w-full rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
         >
           {isUploading
             ? "Sécurisation en cours..."
-            : "Uploader et certifier le brouillon"}
+            : "Déposer et certifier le manuscrit"}
         </button>
       </form>
 
-      {status && (
-        <div
-          className={`mt-4 p-4 rounded font-mono text-sm ${status.includes("Erreur") ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700 break-all"}`}
-        >
-          {status}
+      {(status || lastVersion) && (
+        <div className="space-y-4 border-t border-zinc-100 p-6">
+          {status && (
+            <div
+              role={status.type === "error" ? "alert" : "status"}
+              aria-live="polite"
+              className={`rounded-lg border p-4 text-sm leading-6 ${
+                status.type === "success"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : status.type === "warning"
+                    ? "border-amber-200 bg-amber-50 text-amber-800"
+                    : status.type === "error"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : "border-zinc-200 bg-zinc-50 text-zinc-600"
+              }`}
+            >
+              {status.message}
+            </div>
+          )}
+
+          {lastVersion && (
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleTestDownload}
+                disabled={isTesting || isUploading}
+                className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+              >
+                {isTesting ? "Déchiffrement..." : "↓ Tester le téléchargement"}
+              </button>
+
+              <Link
+                href={`/dashboard/projects/${projectId}`}
+                className="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+              >
+                Voir le projet
+              </Link>
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
 export default function UploadPage() {
   return (
-    <div className="p-10 max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-8">Déposer un brouillon</h1>
-      <Suspense
-        fallback={
-          <div className="p-10 text-center">Chargement de l'interface...</div>
-        }
-      >
-        <UploadForm />
-      </Suspense>
-    </div>
+    <main className="min-h-screen bg-[#FAFAFA] text-zinc-900">
+      <div className="mx-auto max-w-2xl px-6 py-12">
+        <Link
+          href="/dashboard"
+          className="text-sm font-medium text-zinc-500 hover:text-zinc-900"
+        >
+          ← Retour aux projets
+        </Link>
+
+        <header className="mb-8 mt-8">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-zinc-400">
+            Coffre-fort
+          </p>
+
+          <h1 className="text-3xl font-semibold tracking-tight">
+            Déposer un manuscrit
+          </h1>
+
+          <p className="mt-3 text-sm leading-6 text-zinc-500">
+            Conservez une nouvelle version de votre œuvre et préparez sa preuve
+            d'antériorité.
+          </p>
+        </header>
+
+        <Suspense
+          fallback={<p className="text-sm text-zinc-500">Chargement...</p>}
+        >
+          <UploadForm />
+        </Suspense>
+      </div>
+    </main>
   );
 }
