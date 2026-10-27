@@ -6,6 +6,8 @@ import { createClient } from "@supabase/supabase-js";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
+import { syncProjectKeys } from "@/utils/syncProjectKeys";
+
 import { encryptManuscript } from "@/utils/manuscriptCrypto";
 
 import { getLocalIdentity, createLocalIdentity } from "@/utils/localCryptoKeys";
@@ -207,6 +209,16 @@ function UploadForm() {
       };
 
       setLastVersion(version);
+
+      // Préparer automatiquement le partage avec
+      // le collaborateur accepté, s'il est prêt.
+      try {
+        await syncProjectKeys(projectId, userId);
+      } catch (error) {
+        // Le dépôt est déjà enregistré.
+        // Une erreur de partage ne doit pas l'annuler.
+        console.warn("Le partage sera réessayé depuis le projet :", error);
+      }
 
       // 7. Ancrer le SHA-256 ORIGINAL sur Polygon.
       setStatus({

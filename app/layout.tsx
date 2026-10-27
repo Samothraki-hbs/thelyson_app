@@ -3,6 +3,13 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 
+import CryptoIdentityInitializer from "@/components/CryptoIdentityInitializer";
+
+import {
+  getMyRegisteredPublicKey,
+  registerMyPublicKey,
+} from "@/app/actions/cryptoKeys";
+
 // NOUVEAU : Import de votre menu Header
 import Header from "@/components/Header";
 
@@ -35,6 +42,13 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       >
         <body className="min-h-full flex flex-col">
+          {/*
+<CryptoIdentityInitializer
+  getRegisteredKey={getMyRegisteredPublicKey}
+  registerKey={registerMyPublicKey}
+/>
+*/}
+
           {/* NOUVEAU : Le Header est placé tout en haut du body */}
           <Header />
 

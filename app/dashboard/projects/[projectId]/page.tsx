@@ -1,130 +1,166 @@
 "use client";
 
-// NOUVEAU : Import de 'use' depuis react
-import { useEffect, useState, use } from "react";
+import { use, useEffect, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { createClient } from "@supabase/supabase-js";
 import Link from "next/link";
 import { jsPDF } from "jspdf";
+
+import ProjectKeySharing from "@/components/ProjectKeySharing";
+
+import JSZip from "jszip";
 import InviteCollaborator from "@/components/InviteCollaborator";
-import JSZip from "jszip"; // <-- CETTE LIGNE EST INDISPENSABLE
-// NOUVEAU : Typage de la promesse
+import {
+  getDecryptedManuscript,
+  saveBlobToComputer,
+  type DownloadableVersion,
+} from "@/utils/downloadEncryptedManuscript";
+
+type Project = {
+  title: string;
+  author_id: string | null;
+  publisher_id: string | null;
+};
+
+type Profile = {
+  id: string;
+  full_name: string | null;
+  company_name: string | null;
+};
+
+type ManuscriptVersion = DownloadableVersion & {
+  created_at: string;
+  blockchain_tx_id: string | null;
+};
+
+// Évite les caractères interdits dans les noms des fichiers téléchargés.
+function safeDownloadName(name: string): string {
+  return name.replace(/[\\/\x00-\x1f\x7f<>:\"|?*]/g, "_").trim() || "manuscrit";
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Une erreur inattendue est survenue.";
+}
+
 export default function ProjectTimeline({
   params,
 }: {
   params: Promise<{ projectId: string }>;
 }) {
-  const { getToken } = useAuth();
+  const { getToken, userId } = useAuth();
+  const { projectId } = use(params);
 
-  // NOUVEAU : Déballage (unwrapping) de la promesse avec React.use()
-  const resolvedParams = use(params);
-  const projectId = resolvedParams.projectId;
-
-  const [versions, setVersions] = useState<any[]>([]);
-  const [project, setProject] = useState<any>(null);
+  const [versions, setVersions] = useState<ManuscriptVersion[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
-  const [author, setAuthor] = useState<any>(null);
-  const [publisher, setPublisher] = useState<any>(null);
+  const [loadError, setLoadError] = useState("");
+  const [downloadError, setDownloadError] = useState("");
+  const [author, setAuthor] = useState<Profile | null>(null);
+  const [publisher, setPublisher] = useState<Profile | null>(null);
+  const [availableVersionKeys, setAvailableVersionKeys] = useState<Set<string>>(
+    new Set(),
+  );
+  const [downloadingVersionId, setDownloadingVersionId] = useState<
+    string | null
+  >(null);
+  const [isZipping, setIsZipping] = useState(false);
+  const [zipProgress, setZipProgress] = useState("");
 
-  // NOUVEAU : Fonction pour générer le lien de téléchargement sécurisé
-  const handleDownload = async (storagePath: string) => {
-    if (!storagePath) return alert("Fichier introuvable.");
+  // Une version n'est récupérable que si sa clé chiffrée a été
+  // partagée avec le compte connecté. La clé privée reste locale.
+  const hasAccessKey = (version: ManuscriptVersion) =>
+    availableVersionKeys.has(version.id);
 
-    try {
-      const token = await getToken();
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        { global: { headers: { Authorization: `Bearer ${token}` } } },
+  const isEncryptedVersion = (version: ManuscriptVersion) =>
+    version.encryption_version === 1 && Boolean(version.encryption_iv);
+
+  const canDownloadVersion = (version: ManuscriptVersion) =>
+    Boolean(version.storage_path) &&
+    isEncryptedVersion(version) &&
+    hasAccessKey(version);
+
+  const canDownloadAll =
+    versions.length > 0 && versions.every(canDownloadVersion);
+  const isDownloading = downloadingVersionId !== null || isZipping;
+
+  // Télécharger le .enc via Supabase, puis déchiffrer le manuscrit
+  // exclusivement dans le navigateur du destinataire autorisé.
+  const handleDownload = async (version: ManuscriptVersion) => {
+    if (!userId || isDownloading) return;
+    setDownloadError("");
+
+    if (!canDownloadVersion(version)) {
+      setDownloadError(
+        "La clé de déchiffrement de cette version n'est pas encore disponible pour votre compte.",
       );
+      return;
+    }
 
-      // Création d'une URL temporaire valide 60 secondes seulement
-      const { data, error } = await supabase.storage
-        .from("manuscripts")
-        .createSignedUrl(storagePath, 60);
-
-      if (error) throw error;
-
-      // Ouvre le lien pour déclencher le téléchargement du document
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, "_blank");
-      }
-    } catch (error) {
-      console.error("Erreur de téléchargement :", error);
-      alert("Impossible d'accéder au document sécurisé.");
+    setDownloadingVersionId(version.id);
+    try {
+      const originalBlob = await getDecryptedManuscript(
+        version,
+        userId,
+        getToken,
+      );
+      saveBlobToComputer(originalBlob, safeDownloadName(version.file_name));
+    } catch (error: unknown) {
+      console.error("Téléchargement déchiffré :", error);
+      setDownloadError(getErrorMessage(error));
+    } finally {
+      setDownloadingVersionId(null);
     }
   };
 
-  const [isZipping, setIsZipping] = useState(false); // Pour afficher un état de chargement
-
+  // Télécharger et déchiffrer TOUTES les versions AVANT
+  // de construire l'archive ZIP en mémoire, côté navigateur.
   const handleDownloadAll = async () => {
-    if (versions.length === 0) return alert("Aucun fichier à télécharger.");
-    setIsZipping(true);
+    if (!userId || isDownloading) return;
+    setDownloadError("");
 
-    try {
-      const token = await getToken();
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        { global: { headers: { Authorization: `Bearer ${token}` } } },
+    if (!canDownloadAll) {
+      setDownloadError(
+        "Certaines versions ne disposent pas encore d'une clé de déchiffrement accessible. L'archive complète n'est pas disponible.",
       );
+      return;
+    }
 
-      // 1. Extraire tous les chemins de stockage des versions de ce projet
-      const paths = versions.map((v) => v.storage_path).filter(Boolean);
-
-      // 2. Demander à Supabase de générer des URL signées pour TOUS ces chemins d'un coup
-      const { data: urlsData, error } = await supabase.storage
-        .from("manuscripts")
-        .createSignedUrls(paths, 60);
-
-      if (error) throw error;
-
-      // 3. Initialiser la création du dossier ZIP
+    setIsZipping(true);
+    setZipProgress("");
+    try {
       const zip = new JSZip();
 
-      // 4. Télécharger chaque fichier et l'ajouter au ZIP
-      // (Nous utilisons une boucle for...of pour gérer l'asynchrone proprement)
-      for (let i = 0; i < urlsData.length; i++) {
-        const item = urlsData[i];
-        if (!item.signedUrl) continue;
-
-        // On télécharge le contenu du fichier
-        const response = await fetch(item.signedUrl);
-        const blob = await response.blob();
-
-        // On récupère le nom original du fichier à partir de son chemin
-        // Exemple: "user_123/mon-brouillon.pdf" -> "mon-brouillon.pdf"
-        const fileName = paths[i].split("/").pop() || `document_${i}`;
-
-        // Pour éviter d'écraser des fichiers qui auraient le même nom, on ajoute le numéro de version
-        const versionNumber = versions.length - i;
-        const finalFileName = `V${versionNumber}_${fileName}`;
-
-        // Ajout au dossier ZIP
-        zip.file(finalFileName, blob);
+      for (const [index, version] of versions.entries()) {
+        setZipProgress(`Déchiffrement ${index + 1} / ${versions.length}...`);
+        const originalBlob = await getDecryptedManuscript(
+          version,
+          userId,
+          getToken,
+        );
+        const number = versions.length - index;
+        const filename = safeDownloadName(
+          version.file_name || `manuscrit_${number}.pdf`,
+        );
+        zip.file(`V${number}_${filename}`, originalBlob);
       }
 
-      // 5. Générer l'archive finale et déclencher le téléchargement
-      const zipContent = await zip.generateAsync({ type: "blob" });
-
-      // Petite astuce native pour forcer le téléchargement du blob sans librairie supplémentaire
-      const downloadUrl = window.URL.createObjectURL(zipContent);
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-      link.download = `Archive_Projet_${project?.title || "Complet"}.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(downloadUrl); // Nettoyage de la mémoire
-    } catch (error) {
-      console.error("Erreur lors de la création de l'archive :", error);
-      alert("Impossible de créer l'archive ZIP.");
+      setZipProgress("Création de l'archive ZIP...");
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const projectTitle = safeDownloadName(project?.title || "Projet");
+      saveBlobToComputer(zipBlob, `Thélyson_${projectTitle}.zip`);
+    } catch (error: unknown) {
+      console.error("Création ZIP déchiffré :", error);
+      // On n'envoie jamais un ZIP incomplet lorsque l'une des versions échoue.
+      setDownloadError(`Archive non créée : ${getErrorMessage(error)}`);
     } finally {
       setIsZipping(false);
+      setZipProgress("");
     }
   };
 
-  const generateCertificate = (version: any) => {
+  const generateCertificate = (version: ManuscriptVersion) => {
     // Initialisation du document A4
     const doc = new jsPDF();
 
@@ -159,7 +195,7 @@ export default function ProjectTimeline({
     doc.text(`Projet : ${project?.title || "Non renseigné"}`, 20, 70);
 
     const dateAncrage = new Date(version.created_at).toLocaleString("fr-FR");
-    doc.text(`Date d'ancrage : ${dateAncrage}`, 20, 80);
+    doc.text(`Date de dépôt : ${dateAncrage}`, 20, 80);
 
     // Bloc : Empreinte cryptographique
     doc.setFont("helvetica", "bold");
@@ -198,7 +234,7 @@ export default function ProjectTimeline({
     doc.setTextColor(150, 150, 150);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    doc.text("Certificat généré par [Nom de votre application]", 105, 280, {
+    doc.text("Certificat généré par Thélyson", 105, 280, {
       align: "center",
     });
 
@@ -207,65 +243,118 @@ export default function ProjectTimeline({
   };
 
   useEffect(() => {
-    async function fetchProjectAndVersions() {
+    let active = true;
+
+    const fetchProjectAndVersions = async () => {
+      setLoading(true);
+      setLoadError("");
       try {
+        if (!userId)
+          throw new Error("Connectez-vous pour consulter ce projet.");
         const token = await getToken();
+        if (!token)
+          throw new Error("Votre session a expiré. Veuillez vous reconnecter.");
+
         const supabase = createClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
           { global: { headers: { Authorization: `Bearer ${token}` } } },
         );
 
-        // Utilisation du projectId déballé
-        const { data: projectData } = await supabase
+        const { data: projectData, error: projectError } = await supabase
           .from("projects")
           .select("title, author_id, publisher_id")
           .eq("id", projectId)
           .single();
+        if (projectError || !projectData)
+          throw new Error("Projet introuvable ou accès refusé.");
 
-        if (projectData) setProject(projectData);
+        const ids = [projectData.author_id, projectData.publisher_id].filter(
+          (value): value is string => Boolean(value),
+        );
 
-        const idsToFetch = [
-          projectData?.author_id,
-          projectData?.publisher_id,
-        ].filter(Boolean);
-
-        console.log("IDs recherchés :", idsToFetch); // DEBOGAGE 1
-        if (idsToFetch.length > 0) {
-          const { data: profiles } = await supabase
+        let profiles: Profile[] = [];
+        if (ids.length) {
+          const { data, error } = await supabase
             .from("profiles")
             .select("id, full_name, company_name")
-            .in("id", idsToFetch as string[]);
-
-          console.log("Profils trouvés :", profiles); // DEBOGAGE 2
-          if (profiles) {
-            setAuthor(profiles.find((p) => p.id === projectData?.author_id));
-            setPublisher(
-              profiles.find((p) => p.id === projectData?.publisher_id),
-            );
-          }
+            .in("id", ids);
+          if (error) throw error;
+          profiles = data ?? [];
         }
 
-        // Utilisation du projectId déballé
-        const { data: versionsData } = await supabase
+        const { data: versionsData, error: versionsError } = await supabase
           .from("versions")
-          .select("*")
+          .select(
+            "id, storage_path, file_name, file_hash, created_at, blockchain_tx_id, encryption_iv, encryption_version",
+          )
           .eq("project_id", projectId)
           .order("created_at", { ascending: false });
+        if (versionsError) throw versionsError;
+        const fetchedVersions = (versionsData ?? []) as ManuscriptVersion[];
 
-        if (versionsData) setVersions(versionsData);
-      } catch (error) {
-        console.error("Erreur de chargement:", error);
+        let keyIds: string[] = [];
+        if (fetchedVersions.length > 0) {
+          const { data: keyData, error: keyError } = await supabase
+            .from("version_access_keys")
+            .select("version_id")
+            .eq("user_id", userId)
+            .in(
+              "version_id",
+              fetchedVersions.map((v) => v.id),
+            );
+          if (keyError) throw keyError;
+          keyIds = (keyData ?? []).map((item) => item.version_id as string);
+        }
+
+        if (active) {
+          setProject(projectData);
+          setVersions(fetchedVersions);
+          setAvailableVersionKeys(new Set(keyIds));
+          setAuthor(
+            profiles.find((p) => p.id === projectData.author_id) ?? null,
+          );
+          setPublisher(
+            profiles.find((p) => p.id === projectData.publisher_id) ?? null,
+          );
+        }
+      } catch (error: unknown) {
+        console.error("Chargement projet :", error);
+        if (active) setLoadError(getErrorMessage(error));
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
-    }
+    };
 
-    fetchProjectAndVersions();
-  }, [projectId, getToken]); // Remplacement de params.projectId par projectId dans les dépendances
+    void fetchProjectAndVersions();
+    return () => {
+      active = false;
+    };
+  }, [projectId, getToken, userId]);
 
-  if (loading)
-    return <div className="p-10 text-center">Chargement de la frise...</div>;
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-5xl p-10 text-sm text-zinc-500">
+        Chargement de la frise...
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main className="mx-auto max-w-5xl px-6 py-12">
+        <Link href="/dashboard" className="text-sm text-zinc-500">
+          ← Retour aux projets
+        </Link>
+        <p
+          role="alert"
+          className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
+          {loadError}
+        </p>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-[#FAFAFA] text-zinc-900">
@@ -308,11 +397,13 @@ export default function ProjectTimeline({
               <button
                 type="button"
                 onClick={handleDownloadAll}
-                disabled={isZipping}
+                disabled={isDownloading || !canDownloadAll}
                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <span aria-hidden="true">↓</span>
-                {isZipping ? "Création de l'archive..." : "Tout télécharger"}
+                {isZipping
+                  ? zipProgress || "Préparation du ZIP..."
+                  : "Tout télécharger"}
               </button>
             )}
 
@@ -327,6 +418,23 @@ export default function ProjectTimeline({
               Ajouter une version
             </Link>
           </div>
+
+          {!canDownloadAll && versions.length > 0 && (
+            <p className="mt-4 text-xs leading-5 text-amber-700">
+              Certains documents ne sont pas encore déchiffrables depuis ce
+              compte. Leurs clés devront être partagées par le collaborateur qui
+              les possède avant de créer une archive complète.
+            </p>
+          )}
+
+          {downloadError && (
+            <p
+              role="alert"
+              className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+            >
+              {downloadError}
+            </p>
+          )}
         </header>
 
         {/* COLLABORATEURS */}
@@ -395,6 +503,9 @@ export default function ProjectTimeline({
             </div>
           </div>
         </section>
+
+        {/* PARTAGE CRYPTOGRAPHIQUE AUTOMATIQUE */}
+        <ProjectKeySharing projectId={projectId} />
 
         {/* HISTORIQUE DES VERSIONS */}
         <section>
@@ -560,12 +671,29 @@ export default function ProjectTimeline({
                           {/* Télécharger le document original */}
                           <button
                             type="button"
-                            onClick={() => handleDownload(version.storage_path)}
-                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                            onClick={() => handleDownload(version)}
+                            disabled={
+                              !canDownloadVersion(version) || isDownloading
+                            }
+                            title={
+                              !canDownloadVersion(version)
+                                ? "Accès à la clé de ce document en attente"
+                                : undefined
+                            }
+                            className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <span aria-hidden="true">↓</span>
-                            Télécharger l'original
+                            {downloadingVersionId === version.id
+                              ? "Déchiffrement..."
+                              : "Télécharger l'original"}
                           </button>
+                          {!canDownloadVersion(version) && (
+                            <p className="w-full text-xs text-amber-700">
+                              {isEncryptedVersion(version)
+                                ? "Accès au document en attente : sa clé n'a pas encore été partagée avec vous."
+                                : "Cette version ne dispose pas des paramètres de chiffrement attendus."}
+                            </p>
+                          )}
 
                           {/* Télécharger le certificat PDF */}
                           <button
