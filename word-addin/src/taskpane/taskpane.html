@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Thélyson</title>
+
+    <script
+      src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"
+      type="text/javascript"
+    ></script>
+
+    <style>
+      /* Base propre, sans styles du modèle Microsoft */
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        overflow-x: hidden;
+        background: #f7f5fb;
+        color: #302640;
+        font-family: "Segoe UI", Arial, sans-serif;
+        font-size: 14px;
+      }
+
+      #app-body,
+      #app-body * {
+        box-sizing: border-box;
+      }
+
+      #app-body {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      /* En-tête */
+
+      .thy-header {
+        width: 100%;
+        padding: 22px 18px;
+        background: #ffffff;
+        border-bottom: 1px solid #e8e2f1;
+      }
+
+      .thy-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .thy-logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        width: 42px;
+        height: 42px;
+        background: #6d28d9;
+        border-radius: 11px;
+        color: white;
+        font-size: 23px;
+        font-weight: 700;
+      }
+
+      .thy-name {
+        margin: 0;
+        font-size: 23px;
+        font-weight: 700;
+        color: #30165c;
+      }
+
+      .thy-tagline {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: #716882;
+      }
+
+      /* Contenu : une seule colonne */
+
+      .thy-content {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        min-width: 0;
+        gap: 15px;
+        padding: 18px 14px;
+      }
+
+      .thy-card {
+        width: 100%;
+        min-width: 0;
+        padding: 18px;
+        background: #ffffff;
+        border: 1px solid #e8e2f1;
+        border-radius: 12px;
+      }
+
+      .thy-card h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.35;
+        color: #30165c;
+      }
+
+      .thy-description {
+        margin: 0 0 15px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #655a75;
+      }
+
+      /* Document */
+
+      .thy-document {
+        padding: 13px;
+        background: #f3eefc;
+        border-radius: 9px;
+      }
+
+      .thy-small-label {
+        display: block;
+        margin-bottom: 7px;
+        font-size: 12px;
+        color: #716882;
+      }
+
+      .thy-document-name {
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+
+      /* Choix du projet */
+
+      .thy-project-choice {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+        margin-bottom: 19px;
+      }
+
+      .thy-choice-button {
+        width: 100%;
+        padding: 13px;
+        border: 1px solid #ddd5eb;
+        border-radius: 9px;
+        background: white;
+        text-align: left;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        color: #50455e;
+        cursor: pointer;
+      }
+
+      .thy-choice-button.active {
+        background: #f3eefc;
+        border-color: #7c3aed;
+        color: #6d28d9;
+      }
+
+      .thy-field-label {
+        display: block;
+        margin-bottom: 9px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #302640;
+      }
+
+      .thy-input {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #ddd5eb;
+        border-radius: 8px;
+        background: white;
+        color: #302640;
+        font-family: inherit;
+        font-size: 14px;
+      }
+
+      .thy-input:focus {
+        outline: 2px solid #a78bfa;
+        outline-offset: 1px;
+      }
+
+      .thy-help {
+        margin: 10px 0 0;
+        font-size: 12px;
+        line-height: 1.6;
+        color: #716882;
+      }
+
+      .thy-empty {
+        padding: 15px;
+        background: #f3eefc;
+        border-radius: 9px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #655a75;
+      }
+
+      /* Action principale */
+
+      .thy-primary {
+        width: 100%;
+        margin-top: 20px;
+        padding: 14px 10px;
+        border: none;
+        border-radius: 9px;
+        background: #6d28d9;
+        color: white;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .thy-primary:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      .thy-status {
+        margin: 13px 0 0;
+        font-size: 12px;
+        line-height: 1.6;
+        color: #716882;
+        overflow-wrap: anywhere;
+      }
+
+      .thy-status.success {
+        color: #166534;
+      }
+
+      .thy-status.error {
+        color: #b91c1c;
+      }
+
+      .thy-security {
+        font-size: 12px;
+        line-height: 1.6;
+        color: #655a75;
+      }
+
+      .thy-footer {
+        padding: 0 14px 22px;
+        font-size: 11px;
+        text-align: center;
+        color: #91899c;
+      }
+
+      #sideload-msg {
+        padding: 20px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <section id="sideload-msg">Chargement de Thélyson...</section>
+
+    <main id="app-body" style="display: none">
+      <header class="thy-header">
+        <div class="thy-brand">
+          <div class="thy-logo">T</div>
+          <h1 class="thy-name">Thélyson</h1>
+        </div>
+
+        <p class="thy-tagline">Votre création mérite une preuve.</p>
+      </header>
+
+      <div class="thy-content">
+        <!-- Document ouvert -->
+
+        <!-- Connexion au compte Thélyson -->
+        <section class="thy-card">
+          <h2>Mon compte Thélyson</h2>
+
+          <p class="thy-description">
+            Connectez votre compte pour retrouver vos projets et protéger vos manuscrits depuis
+            Word.
+          </p>
+
+          <button id="word-connect" class="thy-primary" type="button" style="margin-top: 0">
+            Se connecter à Thélyson
+          </button>
+
+          <div id="word-authorization" hidden>
+            <p class="thy-help">Confirmez la connexion dans votre navigateur.</p>
+
+            <p class="thy-help">
+              Code de vérification :
+              <strong id="word-user-code"></strong>
+            </p>
+
+            <button
+              id="word-open-browser"
+              class="thy-choice-button"
+              type="button"
+              style="margin-top: 12px"
+            >
+              Ouvrir la page d'autorisation
+            </button>
+
+            <p class="thy-help">
+              Si la page ne s'ouvre pas, utilisez ce lien :
+              <a id="word-verification-link" href="#" target="_blank" rel="noopener noreferrer">
+                Autoriser Thélyson Word
+              </a>
+            </p>
+          </div>
+
+          <p id="word-auth-status" class="thy-status" role="status" aria-live="polite">
+            Vous n'êtes pas encore connecté.
+          </p>
+        </section>
+
+        <section class="thy-card">
+          <h2>Protéger mon manuscrit</h2>
+
+          <p class="thy-description">
+            Préparez une nouvelle version de votre manuscrit directement depuis Word.
+          </p>
+
+          <div class="thy-document">
+            <span class="thy-small-label"> Document ouvert </span>
+
+            <div id="document-name" class="thy-document-name">Détection du document...</div>
+          </div>
+        </section>
+
+        <!-- Gestion du projet -->
+
+        <section class="thy-card">
+          <h2>Mon projet Thélyson</h2>
+
+          <div class="thy-project-choice" role="group" aria-label="Choisir un projet">
+            <button
+              id="new-project-tab"
+              type="button"
+              class="thy-choice-button active"
+              aria-pressed="true"
+            >
+              + Créer un nouveau projet
+            </button>
+
+            <button
+              id="existing-project-tab"
+              type="button"
+              class="thy-choice-button"
+              aria-pressed="false"
+            >
+              Utiliser un projet existant
+            </button>
+          </div>
+
+          <section id="new-project-section">
+            <label for="project-title" class="thy-field-label"> Titre du nouveau projet </label>
+
+            <input
+              id="project-title"
+              class="thy-input"
+              type="text"
+              maxlength="120"
+              placeholder="Ex. : Mon premier roman"
+            />
+
+            <p class="thy-help">Ce projet accueillera votre première version et les suivantes.</p>
+          </section>
+
+          <section id="existing-project-section" hidden>
+            <div class="thy-empty">
+              Vos projets apparaîtront ici après la connexion à votre compte Thélyson.
+            </div>
+          </section>
+
+          <button id="check-document" class="thy-primary" type="button">
+            Vérifier mon manuscrit
+          </button>
+
+          <p id="status" class="thy-status" role="status" aria-live="polite">
+            Mode démonstration : aucun document ne sera envoyé.
+          </p>
+        </section>
+
+        <!-- Sécurité -->
+
+        <section class="thy-card">
+          <div class="thy-security">
+            🔒 Lors du dépôt réel, votre manuscrit sera chiffré avant son enregistrement dans
+            Thélyson.
+          </div>
+        </section>
+      </div>
+
+      <footer class="thy-footer">Thélyson — Protection des créations littéraires</footer>
+    </main>
+  </body>
+</html>
