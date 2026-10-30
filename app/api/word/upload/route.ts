@@ -1,5 +1,6 @@
 import { clerkClient } from "@clerk/nextjs/server";
 import { createClient } from "@supabase/supabase-js";
+import { anchorVersionForUser } from "@/lib/server/anchorVersion";
 
 export const runtime = "nodejs";
 
@@ -308,20 +309,75 @@ export async function POST(request: Request) {
       );
     }
 
-    // 13. Confirmer uniquement l'enregistrement chiffré.
-    // Aucun ancrage blockchain à cette étape.
-    return json(
-      {
-        success: true,
-        versionId: savedVersion.id,
-        storagePath,
-        blockchainAnchored: false,
-        message:
-          "Manuscrit chiffré enregistré. " +
-          "Ancrage blockchain non encore effectué.",
-      },
-      201,
-    );
+    // 13. Ancrer l'empreinte SHA-256 sur Polygon Amoy.
+    // La version est déjà enregistrée dans Supabase.
+    // L'identité userId provient du jeton OAuth Clerk vérifié.
+
+    try {
+      const anchorResult = await anchorVersionForUser(
+        userId,
+        savedVersion.id,
+        fileHash,
+      );
+
+      if (anchorResult.success) {
+        return json(
+          {
+            success: true,
+            versionId: savedVersion.id,
+            storagePath,
+            blockchainSubmitted: true,
+            blockchainTxId: anchorResult.txId,
+            blockchainStatus: "submitted",
+            message:
+              "Manuscrit chiffré enregistré. " +
+              "Transaction Polygon Amoy transmise et " +
+              "référence enregistrée. " +
+              "Confirmation sur la blockchain à vérifier.",
+          },
+          201,
+        );
+      }
+
+      // Le manuscrit reste enregistré, même si
+      // l'ancrage n'a pas abouti ou reste incertain.
+      console.warn("Thélyson Word : ancrage non confirmé", anchorResult.error);
+
+      return json(
+        {
+          success: true,
+          versionId: savedVersion.id,
+          storagePath,
+          blockchainSubmitted: false,
+          blockchainStatus: "unconfirmed",
+          blockchainWarning: anchorResult.error,
+          message:
+            "Manuscrit chiffré enregistré. " +
+            "Ancrage blockchain non confirmé. " +
+            "Ne redéposez pas le document avant vérification.",
+        },
+        201,
+      );
+    } catch (error) {
+      console.error("Thélyson Word : état blockchain incertain", error);
+
+      // Une erreur blockchain ne doit jamais faire croire
+      // que l'enregistrement Supabase a échoué.
+      return json(
+        {
+          success: true,
+          versionId: savedVersion.id,
+          storagePath,
+          blockchainSubmitted: false,
+          blockchainStatus: "unconfirmed",
+          message:
+            "Manuscrit chiffré enregistré. " +
+            "État de l'ancrage blockchain incertain. " +
+            "Ne redéposez pas le document avant vérification.",
+        },
+        201,
+      );
+    }
   } catch (error) {
     console.error("Thélyson Word : erreur API dépôt", error);
 

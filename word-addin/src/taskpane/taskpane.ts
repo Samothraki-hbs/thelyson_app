@@ -749,11 +749,18 @@ Office.onReady((info) => {
 
       // Le navigateur définit lui-même le Content-Type
       // multipart/form-data et sa boundary.
+
       const result = (await response.json()) as {
         success?: boolean;
         versionId?: string;
         storagePath?: string;
-        blockchainAnchored?: boolean;
+
+        // Résultat de la certification Polygon Amoy.
+        blockchainSubmitted?: boolean;
+        blockchainStatus?: "submitted" | "unconfirmed";
+        blockchainTxId?: string;
+        blockchainWarning?: string;
+
         error?: string;
         requiresReview?: boolean;
       };
@@ -768,19 +775,39 @@ Office.onReady((info) => {
         );
       }
 
-      // 6. Confirmer uniquement ce qui est réellement terminé.
+      // 6. Afficher le résultat réel du dépôt et de la blockchain.
       if (notice) {
-        notice.textContent =
-          "Manuscrit chiffré enregistré dans Thélyson. " +
-          "Version : " +
-          result.versionId +
-          ". L'ancrage blockchain n'a pas encore été effectué.";
+        const versionMessage =
+          "Manuscrit chiffré enregistré dans Thélyson. " + "Version : " + result.versionId + ". ";
+
+        if (
+          result.blockchainStatus === "submitted" &&
+          result.blockchainTxId &&
+          /^0x[a-fA-F0-9]{64}$/.test(result.blockchainTxId)
+        ) {
+          notice.textContent =
+            versionMessage +
+            "Transaction Polygon Amoy transmise. " +
+            "Identifiant : " +
+            result.blockchainTxId +
+            ". Confirmation dans un bloc encore à vérifier.";
+        } else {
+          notice.textContent =
+            versionMessage +
+            "Ancrage blockchain non confirmé. " +
+            "Ne redéposez pas le manuscrit avant vérification." +
+            (result.blockchainWarning ? " Détail : " + result.blockchainWarning : "");
+        }
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Erreur inconnue lors du dépôt.";
 
       if (notice) {
-        notice.textContent = message;
+        notice.textContent =
+          message +
+          " Si la demande de dépôt a déjà été envoyée, " +
+          "vérifiez d'abord votre projet sur Thélyson Web " +
+          "avant de recommencer.";
       }
 
       console.error("Thélyson Word : échec du dépôt chiffré", message);
