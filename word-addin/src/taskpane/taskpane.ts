@@ -940,6 +940,8 @@ Office.onReady((info) => {
       // Vérifier les deux enveloppes RSA avant d'autoriser
       // tout dépôt réel sur un projet partagé.
 
+      // Vérifier que la clé AES a bien été protégée
+      // pour le collaborateur avant tout envoi.
       if (recipientPublicKeyJwk) {
         if (
           !encryptedManuscript.recipientWrappedKeyBase64 ||
@@ -948,16 +950,12 @@ Office.onReady((info) => {
           throw new Error("La clé AES du collaborateur n'a pas été protégée correctement.");
         }
 
-        if (notice) {
-          notice.textContent =
-            "Test réussi : manuscrit chiffré avec AES-256-GCM. " +
-            "Clé AES protégée pour le déposant et son collaborateur. " +
-            "Aucun fichier envoyé, aucune version créée, " +
-            "aucune transaction blockchain effectuée.";
+        if (
+          typeof recipientPublicKeyJwk.n !== "string" ||
+          !/^[A-Za-z0-9_-]{512}$/.test(recipientPublicKeyJwk.n)
+        ) {
+          throw new Error("La clé publique RSA du collaborateur est invalide.");
         }
-
-        // Arrêt volontaire avant l'envoi à Supabase.
-        return;
       }
 
       // 4. Construire le formulaire envoyé au serveur.
@@ -970,6 +968,15 @@ Office.onReady((info) => {
       form.append("ivBase64", encryptedManuscript.ivBase64);
       form.append("wrappedKeyBase64", encryptedManuscript.wrappedKeyBase64);
       form.append("encryptedFile", encryptedManuscript.encryptedBlob, "manuscrit.enc");
+
+      // Projet partagé : transmettre les informations
+      // nécessaires pour enregistrer l'accès du collaborateur.
+      // Aucune clé AES en clair n'est transmise.
+      if (recipientPublicKeyJwk) {
+        form.append("recipientModulus", recipientPublicKeyJwk.n!);
+
+        form.append("recipientWrappedKeyBase64", encryptedManuscript.recipientWrappedKeyBase64!);
+      }
 
       if (notice) {
         notice.textContent = "Envoi du manuscrit chiffré vers Thélyson...";
@@ -991,10 +998,11 @@ Office.onReady((info) => {
         success?: boolean;
         versionId?: string;
         storagePath?: string;
+        sharingStatus?: "confirmed" | "unconfirmed";
 
         // Résultat de la certification Polygon Amoy.
         blockchainSubmitted?: boolean;
-        blockchainStatus?: "submitted" | "unconfirmed";
+        blockchainStatus?: "submitted" | "unconfirmed" | "not_started";
         blockchainTxId?: string;
         blockchainWarning?: string;
 
@@ -1010,6 +1018,23 @@ Office.onReady((info) => {
             ? message + " Ne relancez pas le dépôt avant vérification."
             : message
         );
+      }
+
+      // Le manuscrit a été enregistré, mais le partage
+      // de sa clé RSA n'a pas pu être confirmé.
+      if (result.sharingStatus === "unconfirmed") {
+        if (notice) {
+          notice.textContent =
+            "Manuscrit chiffré enregistré dans Thélyson. " +
+            "Version : " +
+            result.versionId +
+            ". ATTENTION : l'accès du collaborateur " +
+            "n'est pas confirmé. " +
+            "Ne redéposez pas le manuscrit. " +
+            "Vérifiez d'abord cette version dans Thélyson Web.";
+        }
+
+        return;
       }
 
       // 6. Afficher le résultat réel du dépôt et de la blockchain.

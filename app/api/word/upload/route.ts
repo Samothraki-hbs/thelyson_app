@@ -243,6 +243,8 @@ export async function POST(request: Request) {
     const ivBase64 = form.get("ivBase64");
     const wrappedKeyBase64 = form.get("wrappedKeyBase64");
     const encryptedFile = form.get("encryptedFile");
+    const recipientModulus = form.get("recipientModulus");
+    const recipientWrappedKeyBase64 = form.get("recipientWrappedKeyBase64");
 
     // 4. Vérifier les informations du manuscrit.
     const uuidPattern =
@@ -338,12 +340,119 @@ export async function POST(request: Request) {
 
     // Les projets déjà liés à deux utilisateurs sont
     // temporairement exclus du dépôt Word.
-    if (project.author_id && project.publisher_id) {
+
+    // Préparer le partage si le projet possède un collaborateur.
+    // Tous les contrôles ont lieu AVANT l'envoi Storage.
+
+    const recipientId =
+      project.author_id === userId ? project.publisher_id : project.author_id;
+
+    let recipientSharing: {
+      recipientId: string;
+      recipientModulus: string;
+      wrappedKey: string;
+    } | null = null;
+
+    if (recipientId && recipientId !== userId) {
+      // 1. Exiger les deux informations de partage.
+      if (
+        typeof recipientModulus !== "string" ||
+        !/^[A-Za-z0-9_-]{512}$/.test(recipientModulus) ||
+        typeof recipientWrappedKeyBase64 !== "string" ||
+        !/^[A-Za-z0-9+/]{512}$/.test(recipientWrappedKeyBase64)
+      ) {
+        return json(
+          {
+            error:
+              "Les données de chiffrement du collaborateur sont absentes ou invalides.",
+          },
+          400,
+        );
+      }
+
+      // 2. Vérifier une invitation acceptée entre
+      // les deux membres exacts du projet.
+      const { data: invitations, error: invitationError } = await supabase
+        .from("project_invitations")
+        .select("id")
+        .eq("project_id", projectId)
+        .eq("status", "accepted")
+        .in("inviter_id", [userId, recipientId])
+        .in("invitee_id", [userId, recipientId])
+        .limit(1);
+
+      if (invitationError) {
+        return json(
+          {
+            error: "Impossible de vérifier le consentement du collaborateur.",
+          },
+          500,
+        );
+      }
+
+      if (!invitations?.length) {
+        return json(
+          {
+            error: "L'invitation du collaborateur n'est pas acceptée.",
+          },
+          409,
+        );
+      }
+
+      // 3. Vérifier la clé publique réellement
+      // enregistrée pour le collaborateur.
+      const { data: recipientIdentity, error: recipientError } = await supabase
+        .from("user_crypto_keys")
+        .select("public_key_jwk")
+        .eq("user_id", recipientId)
+        .maybeSingle();
+
+      if (recipientError) {
+        return json(
+          {
+            error: "Impossible de vérifier la clé RSA du collaborateur.",
+          },
+          500,
+        );
+      }
+
+      const recipientJwk = recipientIdentity?.public_key_jwk as
+        | JsonWebKey
+        | undefined;
+
+      if (
+        !recipientJwk ||
+        recipientJwk.kty !== "RSA" ||
+        recipientJwk.e !== "AQAB" ||
+        recipientJwk.n !== recipientModulus
+      ) {
+        return json(
+          {
+            error:
+              "La clé publique du collaborateur a changé ou n'est pas disponible. Actualisez le projet.",
+          },
+          409,
+        );
+      }
+
+      // 4. Garder les données vérifiées pour
+      // l'enregistrement après la création de la version.
+      recipientSharing = {
+        recipientId,
+        recipientModulus,
+        wrappedKey: recipientWrappedKeyBase64,
+      };
+    } else if (
+      recipientModulus !== null ||
+      recipientWrappedKeyBase64 !== null
+    ) {
+      // Un projet individuel ne doit pas contenir
+      // d'informations de partage supplémentaires.
       return json(
         {
-          error: "Le dépôt Word sur un projet partagé n'est pas encore activé.",
+          error: "Informations de collaborateur inattendues.",
         },
-        409,
+        400,
       );
     }
 
@@ -453,6 +562,65 @@ export async function POST(request: Request) {
         },
         500,
       );
+    }
+
+    // Enregistrer l'enveloppe RSA du collaborateur
+    // avec la fonction SQL déjà utilisée par Thélyson Web.
+    if (recipientSharing) {
+      const { error: shareError } = await supabase.rpc(
+        "share_version_access_key",
+        {
+          p_sender_id: userId,
+          p_project_id: projectId,
+          p_version_id: savedVersion.id,
+          p_recipient_id: recipientSharing.recipientId,
+          p_recipient_modulus: recipientSharing.recipientModulus,
+          p_wrapped_key: recipientSharing.wrappedKey,
+        },
+      );
+
+      // Vérifier que le destinataire possède bien
+      // l'enveloppe RSA attendue.
+      const { data: recipientAccess, error: accessError } = shareError
+        ? { data: null, error: shareError }
+        : await supabase
+            .from("version_access_keys")
+            .select("encrypted_key")
+            .eq("version_id", savedVersion.id)
+            .eq("user_id", recipientSharing.recipientId)
+            .maybeSingle();
+
+      if (
+        shareError ||
+        accessError ||
+        recipientAccess?.encrypted_key !== recipientSharing.wrappedKey
+      ) {
+        console.error(
+          "Thélyson Word : partage de la version non confirmé",
+          shareError?.message ??
+            accessError?.message ??
+            "Clé du collaborateur non vérifiée",
+        );
+
+        // Le manuscrit est déjà enregistré.
+        // Ne pas déclencher la blockchain ni inviter
+        // l'utilisateur à redéposer le document.
+        return json(
+          {
+            success: true,
+            versionId: savedVersion.id,
+            storagePath,
+            sharingStatus: "unconfirmed",
+            blockchainSubmitted: false,
+            blockchainStatus: "not_started",
+            message:
+              "Le manuscrit chiffré est enregistré, " +
+              "mais l'accès du collaborateur n'est pas confirmé. " +
+              "Ne redéposez pas le document avant vérification.",
+          },
+          201,
+        );
+      }
     }
 
     // 13. Ancrer l'empreinte SHA-256 sur Polygon Amoy.
