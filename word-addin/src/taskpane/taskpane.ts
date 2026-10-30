@@ -236,6 +236,8 @@ Office.onReady((info) => {
 
   let wordPublicKeyJwk: JsonWebKey | null = null;
 
+  let accessToken: string | null = null;
+
   // Navigation entre les deux modes de projet.
   const newProjectTab = document.getElementById("new-project-tab");
   const existingProjectTab = document.getElementById("existing-project-tab");
@@ -312,7 +314,6 @@ Office.onReady((info) => {
     verificationLink &&
     authStatus
   ) {
-    let accessToken: string | null = null;
     let verificationUrl = "";
 
     function showAuthStatus(message: string) {
@@ -640,109 +641,152 @@ Office.onReady((info) => {
   button.disabled = false;
   button.textContent = "Tester la lecture du document";
 
+  // Premier dépôt réel depuis Word.
+  // Limité aux projets existants non partagés.
+  button.disabled = false;
+  button.textContent = "Déposer le manuscrit chiffré (test)";
+
   button.addEventListener("click", async () => {
-    // Vérifier le mode de projet sélectionné.
-    const nouveauProjet =
-      document.getElementById("new-project-tab")?.getAttribute("aria-pressed") === "true";
+    const token = accessToken;
+    const publicKeyJwk = wordPublicKeyJwk;
 
-    if (nouveauProjet) {
-      const titleInput = document.getElementById("project-title") as HTMLInputElement | null;
-
-      const title = titleInput?.value.trim() ?? "";
-
-      if (!title) {
-        if (notice) {
-          notice.textContent = "Veuillez renseigner le titre du nouveau projet.";
-        }
-        return;
+    if (!token) {
+      if (notice) {
+        notice.textContent = "Connectez-vous d'abord à votre compte Thélyson.";
       }
-    } else {
-      const projectSelect = document.getElementById(
-        "word-project-select"
-      ) as HTMLSelectElement | null;
-
-      if (!projectSelect?.value) {
-        if (notice) {
-          notice.textContent = "Veuillez sélectionner un projet existant.";
-        }
-        return;
-      }
+      return;
     }
+
+    if (!publicKeyJwk) {
+      if (notice) {
+        notice.textContent = "Votre clé publique RSA n'est pas prête.";
+      }
+      return;
+    }
+
+    // Pour ce premier essai, un projet existant est requis.
+    const modeExistant =
+      document.getElementById("existing-project-tab")?.getAttribute("aria-pressed") === "true";
+
+    if (!modeExistant) {
+      if (notice) {
+        notice.textContent =
+          "Pour ce premier dépôt, choisissez " + "un projet existant non partagé.";
+      }
+      return;
+    }
+
+    const projectSelect = document.getElementById(
+      "word-project-select"
+    ) as HTMLSelectElement | null;
+
+    const projectId = projectSelect?.value ?? "";
+
+    if (!projectId) {
+      if (notice) {
+        notice.textContent = "Sélectionnez d'abord un projet Thélyson.";
+      }
+      return;
+    }
+
+    const fileName = getDocumentName();
+
+    if (!/\.docx$/i.test(fileName) || fileName.length > 255 || /[\\/]/.test(fileName)) {
+      if (notice) {
+        notice.textContent =
+          "Enregistrez d'abord votre document Word " + "avec un nom de fichier .docx valide.";
+      }
+      return;
+    }
+
     button.disabled = true;
-    button.textContent = "Lecture en cours...";
-
-    if (notice) {
-      notice.textContent = "Lecture locale du document Word...";
-    }
+    button.textContent = "Dépôt en cours...";
 
     try {
-      const documentBytes = await readWordDocument();
-
-      // Vérifier d'abord que le chiffrement AES local fonctionne.
-      await testerChiffrementLocal(documentBytes);
-
-      // La clé publique doit provenir du compte Thélyson connecté.
-      if (!wordPublicKeyJwk) {
-        throw new Error(
-          "Clé publique RSA indisponible. Connectez-vous à Thélyson et vérifiez que votre clé RSA est prête."
-        );
+      if (notice) {
+        notice.textContent = "Lecture et chiffrement local du manuscrit...";
       }
 
-      // Préparer le manuscrit avec le format cryptographique Thélyson.
-      const encryptedManuscript = await preparerManuscritWord(documentBytes, wordPublicKeyJwk);
+      // 1. Lire le document Word ouvert.
+      const documentBytes = await readWordDocument();
 
-      // Vérifier les formats attendus par Thélyson Web.
+      // 2. Préparer le chiffrement AES-GCM + RSA-OAEP.
+      const encryptedManuscript = await preparerManuscritWord(documentBytes, publicKeyJwk);
+
+      // 3. Vérifier le format cryptographique.
       if (
         encryptedManuscript.ivBase64.length !== 16 ||
         encryptedManuscript.wrappedKeyBase64.length !== 512 ||
         !/^[a-f0-9]{64}$/.test(encryptedManuscript.fileHash) ||
         encryptedManuscript.encryptedBlob.size !== documentBytes.byteLength + 16
       ) {
-        throw new Error("Le format du manuscrit chiffré est incompatible avec Thélyson.");
+        throw new Error("Le format du manuscrit chiffré est invalide.");
       }
 
-      // Calculer le SHA-256 du document Word récupéré.
-      const buffer = new ArrayBuffer(documentBytes.byteLength);
+      // 4. Construire le formulaire envoyé au serveur.
+      // Aucun octet du DOCX original n'est inclus.
+      const form = new FormData();
 
-      new Uint8Array(buffer).set(documentBytes);
-
-      const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-
-      const fileHash = Array.from(new Uint8Array(hashBuffer))
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
-
-      console.log("Thélyson - Empreinte SHA-256 :", fileHash);
-
-      const sizeKB = (documentBytes.byteLength / 1024).toFixed(1);
+      form.append("projectId", projectId);
+      form.append("fileName", fileName);
+      form.append("fileHash", encryptedManuscript.fileHash);
+      form.append("ivBase64", encryptedManuscript.ivBase64);
+      form.append("wrappedKeyBase64", encryptedManuscript.wrappedKeyBase64);
+      form.append("encryptedFile", encryptedManuscript.encryptedBlob, "manuscrit.enc");
 
       if (notice) {
-        notice.textContent =
-          "Document lu avec succès : " +
-          " Clé AES protégée par RSA-OAEP. Format Thélyson vérifié." +
-          sizeKB +
-          " Ko. " +
-          "Empreinte SHA-256 : " +
-          fileHash.slice(0, 20) +
-          "Chiffrement AES-GCM local vérifié" +
-          "… Aucun fichier n'a été envoyé.";
+        notice.textContent = "Envoi du manuscrit chiffré vers Thélyson...";
       }
 
-      console.log(
-        "Thélyson : document Word accessible, taille :",
-        documentBytes.byteLength,
-        "octets"
-      );
-    } catch (error) {
-      console.error("Thélyson : erreur de lecture Word", error);
+      // 5. Appeler l'API Word authentifiée.
+      const response = await fetch("https://localhost:3001/api/word/upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: form,
+      });
 
+      // Le navigateur définit lui-même le Content-Type
+      // multipart/form-data et sa boundary.
+      const result = (await response.json()) as {
+        success?: boolean;
+        versionId?: string;
+        storagePath?: string;
+        blockchainAnchored?: boolean;
+        error?: string;
+        requiresReview?: boolean;
+      };
+
+      if (!response.ok || !result.success || !result.versionId) {
+        const message = result.error ?? `Le serveur a répondu HTTP ${response.status}.`;
+
+        throw new Error(
+          result.requiresReview
+            ? message + " Ne relancez pas le dépôt avant vérification."
+            : message
+        );
+      }
+
+      // 6. Confirmer uniquement ce qui est réellement terminé.
       if (notice) {
         notice.textContent =
-          error instanceof Error ? error.message : "Impossible de lire ce document.";
+          "Manuscrit chiffré enregistré dans Thélyson. " +
+          "Version : " +
+          result.versionId +
+          ". L'ancrage blockchain n'a pas encore été effectué.";
       }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Erreur inconnue lors du dépôt.";
+
+      if (notice) {
+        notice.textContent = message;
+      }
+
+      console.error("Thélyson Word : échec du dépôt chiffré", message);
     } finally {
       button.disabled = false;
-      button.textContent = "Tester la lecture du document";
+      button.textContent = "Déposer le manuscrit chiffré (test)";
     }
   });
 });
