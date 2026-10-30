@@ -282,6 +282,17 @@ Office.onReady((info) => {
 
   let accessToken: string | null = null;
 
+  // Conserver l'identifiant d'un projet créé depuis Word.
+  // Cela permet de réutiliser ce projet si le dépôt échoue.
+  let projetCreeDansWord: {
+    titre: string;
+    id: string;
+  } | null = null;
+
+  // Empêcher une nouvelle création automatique
+  // si la réponse du serveur a été perdue.
+  let creationProjetIncertaine: string | null = null;
+
   // Navigation entre les deux modes de projet.
   const newProjectTab = document.getElementById("new-project-tab");
   const existingProjectTab = document.getElementById("existing-project-tab");
@@ -822,27 +833,33 @@ Office.onReady((info) => {
       return;
     }
 
-    // Pour ce premier essai, un projet existant est requis.
+    // Déterminer si l'utilisateur veut créer un projet
+    // ou utiliser un projet existant.
     const modeExistant =
       document.getElementById("existing-project-tab")?.getAttribute("aria-pressed") === "true";
 
-    if (!modeExistant) {
-      if (notice) {
-        notice.textContent =
-          "Pour ce premier dépôt, choisissez " + "un projet existant non partagé.";
-      }
-      return;
-    }
+    const titleInput = document.getElementById("project-title") as HTMLInputElement | null;
+
+    const titreNouveauProjet = titleInput?.value.trim() ?? "";
 
     const projectSelect = document.getElementById(
       "word-project-select"
     ) as HTMLSelectElement | null;
 
-    const projectId = projectSelect?.value ?? "";
+    // Pour un nouveau projet, l'identifiant sera récupéré
+    // après sa création sur le serveur.
+    let projectId = modeExistant ? (projectSelect?.value ?? "") : "";
 
-    if (!projectId) {
+    if (modeExistant && !projectId) {
       if (notice) {
         notice.textContent = "Sélectionnez d'abord un projet Thélyson.";
+      }
+      return;
+    }
+
+    if (!modeExistant && (titreNouveauProjet.length === 0 || titreNouveauProjet.length > 120)) {
+      if (notice) {
+        notice.textContent = "Renseignez un titre de projet de 1 à 120 caractères.";
       }
       return;
     }
@@ -867,6 +884,88 @@ Office.onReady((info) => {
 
       // 1. Lire le document Word ouvert.
       const documentBytes = await readWordDocument();
+
+      // Création automatique d'un nouveau projet Thélyson.
+      // Un projet existant n'est jamais recréé.
+      if (!modeExistant) {
+        if (projetCreeDansWord && projetCreeDansWord.titre === titreNouveauProjet) {
+          // Réutiliser le projet déjà créé dans cette session.
+          projectId = projetCreeDansWord.id;
+        } else {
+          if (creationProjetIncertaine === titreNouveauProjet) {
+            throw new Error(
+              "Une précédente création de ce projet " +
+                "n'a pas pu être confirmée. Vérifiez d'abord " +
+                "vos projets dans Thélyson Web, puis sélectionnez " +
+                "le projet existant avant de reprendre."
+            );
+          }
+
+          if (notice) {
+            notice.textContent = "Création du projet Thélyson...";
+          }
+
+          // Marquer la création comme incertaine tant que
+          // nous n'avons pas reçu un identifiant valide.
+          creationProjetIncertaine = titreNouveauProjet;
+
+          const projectResponse = await fetch("https://localhost:3001/api/word/projects", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              title: titreNouveauProjet,
+            }),
+          });
+
+          const projectResult = (await projectResponse.json()) as {
+            id?: string;
+            projectId?: string;
+            project?: { id?: string };
+            error?: string;
+          };
+
+          if (!projectResponse.ok) {
+            // Ces refus indiquent normalement que la
+            // demande n'a pas abouti à une création.
+            if ([400, 401, 403, 415, 422].includes(projectResponse.status)) {
+              creationProjetIncertaine = null;
+            }
+
+            throw new Error(
+              projectResult.error ?? `Création du projet refusée (HTTP ${projectResponse.status}).`
+            );
+          }
+
+          // Accepter les formats de réponse courants.
+          // L'identifiant doit toujours être un UUID valide.
+          const nouvelId = projectResult.projectId ?? projectResult.id ?? projectResult.project?.id;
+
+          if (
+            typeof nouvelId !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nouvelId)
+          ) {
+            throw new Error(
+              "Le serveur n'a pas confirmé l'identifiant " +
+                "du nouveau projet. Vérifiez son existence " +
+                "dans Thélyson Web avant de recommencer."
+            );
+          }
+
+          // Conserver le projet créé pour les éventuels
+          // essais suivants, sans le recréer.
+          projectId = nouvelId;
+
+          projetCreeDansWord = {
+            titre: titreNouveauProjet,
+            id: nouvelId,
+          };
+
+          creationProjetIncertaine = null;
+        }
+      }
 
       // Vérifier à nouveau les droits de partage au moment
       // de préparer le manuscrit, et non uniquement
