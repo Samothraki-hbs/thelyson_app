@@ -868,8 +868,63 @@ Office.onReady((info) => {
       // 1. Lire le document Word ouvert.
       const documentBytes = await readWordDocument();
 
+      // Vérifier à nouveau les droits de partage au moment
+      // de préparer le manuscrit, et non uniquement
+      // lors de la sélection du projet.
+
+      if (notice) {
+        notice.textContent = "Vérification du projet et des clés RSA...";
+      }
+
+      const sharingResponse = await fetch(
+        "https://localhost:3001/api/word/upload?projectId=" + encodeURIComponent(projectId),
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: "no-store",
+        }
+      );
+
+      const sharing = (await sharingResponse.json()) as {
+        kind?: "no-collaborator" | "consent-not-confirmed" | "collaborator-not-ready" | "ready";
+        recipientId?: string;
+        recipientPublicKeyJwk?: JsonWebKey;
+        error?: string;
+      };
+
+      if (!sharingResponse.ok) {
+        throw new Error(
+          sharing.error ?? `Vérification du partage refusée (HTTP ${sharingResponse.status}).`
+        );
+      }
+
+      if (sharing.kind === "consent-not-confirmed") {
+        throw new Error("L'invitation du collaborateur n'est pas acceptée.");
+      }
+
+      if (sharing.kind === "collaborator-not-ready") {
+        throw new Error("Le collaborateur ne possède pas encore de clé RSA.");
+      }
+
+      if (sharing.kind !== "no-collaborator" && sharing.kind !== "ready") {
+        throw new Error("État de partage du projet non reconnu.");
+      }
+
+      if (sharing.kind === "ready" && (!sharing.recipientId || !sharing.recipientPublicKeyJwk)) {
+        throw new Error("Les informations cryptographiques du collaborateur sont incomplètes.");
+      }
+
+      const recipientPublicKeyJwk =
+        sharing.kind === "ready" ? sharing.recipientPublicKeyJwk : undefined;
+
       // 2. Préparer le chiffrement AES-GCM + RSA-OAEP.
-      const encryptedManuscript = await preparerManuscritWord(documentBytes, publicKeyJwk);
+      const encryptedManuscript = await preparerManuscritWord(
+        documentBytes,
+        publicKeyJwk,
+        recipientPublicKeyJwk
+      );
 
       // 3. Vérifier le format cryptographique.
       if (
@@ -879,6 +934,30 @@ Office.onReady((info) => {
         encryptedManuscript.encryptedBlob.size !== documentBytes.byteLength + 16
       ) {
         throw new Error("Le format du manuscrit chiffré est invalide.");
+      }
+
+      // TEST DE PARTAGE :
+      // Vérifier les deux enveloppes RSA avant d'autoriser
+      // tout dépôt réel sur un projet partagé.
+
+      if (recipientPublicKeyJwk) {
+        if (
+          !encryptedManuscript.recipientWrappedKeyBase64 ||
+          !/^[A-Za-z0-9+/]{512}$/.test(encryptedManuscript.recipientWrappedKeyBase64)
+        ) {
+          throw new Error("La clé AES du collaborateur n'a pas été protégée correctement.");
+        }
+
+        if (notice) {
+          notice.textContent =
+            "Test réussi : manuscrit chiffré avec AES-256-GCM. " +
+            "Clé AES protégée pour le déposant et son collaborateur. " +
+            "Aucun fichier envoyé, aucune version créée, " +
+            "aucune transaction blockchain effectuée.";
+        }
+
+        // Arrêt volontaire avant l'envoi à Supabase.
+        return;
       }
 
       // 4. Construire le formulaire envoyé au serveur.
