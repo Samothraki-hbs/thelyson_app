@@ -496,6 +496,120 @@ Office.onReady((info) => {
         }
 
         selectionZone.append(label, select);
+
+        // Vérifier les conditions de partage lorsque
+        // l'utilisateur sélectionne un projet existant.
+        let verificationNumero = 0;
+
+        select.addEventListener("change", async () => {
+          const selectedProjectId = select.value;
+          const currentVerification = ++verificationNumero;
+
+          if (!selectedProjectId) {
+            showAuthStatus("Compte connecté. Sélectionnez un projet.");
+            return;
+          }
+
+          showAuthStatus("Vérification des droits de partage du projet...");
+
+          try {
+            const response = await fetch(
+              "https://localhost:3001/api/word/upload?projectId=" +
+                encodeURIComponent(selectedProjectId),
+              {
+                method: "GET",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                },
+                cache: "no-store",
+              }
+            );
+
+            const sharing = (await response.json()) as {
+              kind?:
+                "no-collaborator" | "consent-not-confirmed" | "collaborator-not-ready" | "ready";
+              recipientId?: string;
+              recipientPublicKeyJwk?: JsonWebKey;
+              error?: string;
+            };
+
+            if (!response.ok) {
+              throw new Error(sharing.error ?? `Vérification refusée (HTTP ${response.status}).`);
+            }
+
+            // Ignorer une ancienne réponse si l'utilisateur
+            // a changé de projet pendant la requête.
+            if (currentVerification !== verificationNumero || select.value !== selectedProjectId) {
+              return;
+            }
+
+            if (sharing.kind === "no-collaborator") {
+              showAuthStatus("Projet individuel : dépôt chiffré disponible.");
+              return;
+            }
+
+            if (sharing.kind === "consent-not-confirmed") {
+              showAuthStatus("Projet partagé : invitation non encore acceptée.");
+              return;
+            }
+
+            if (sharing.kind === "collaborator-not-ready") {
+              showAuthStatus("Projet partagé : clé RSA du collaborateur absente.");
+              return;
+            }
+
+            if (
+              sharing.kind !== "ready" ||
+              !sharing.recipientId ||
+              !sharing.recipientPublicKeyJwk
+            ) {
+              throw new Error("Réponse de partage incomplète.");
+            }
+
+            // Vérifier que la clé publique du collaborateur
+            // est compatible avec le chiffrement Thélyson.
+            const jwk = sharing.recipientPublicKeyJwk;
+
+            if (jwk.kty !== "RSA" || typeof jwk.n !== "string" || jwk.e !== "AQAB") {
+              throw new Error("Clé publique du collaborateur invalide.");
+            }
+
+            const recipientKey = await crypto.subtle.importKey(
+              "jwk",
+              jwk,
+              {
+                name: "RSA-OAEP",
+                hash: "SHA-256",
+              },
+              false,
+              ["wrapKey"]
+            );
+
+            const algorithm = recipientKey.algorithm as RsaHashedKeyAlgorithm;
+
+            if (algorithm.modulusLength !== 3072) {
+              throw new Error("Longueur RSA du collaborateur incompatible.");
+            }
+
+            if (currentVerification !== verificationNumero || select.value !== selectedProjectId) {
+              return;
+            }
+
+            showAuthStatus(
+              "Projet partagé : consentement confirmé. " +
+                "Clé publique RSA du collaborateur prête."
+            );
+          } catch (error: unknown) {
+            if (currentVerification !== verificationNumero || select.value !== selectedProjectId) {
+              return;
+            }
+
+            const message =
+              error instanceof Error ? error.message : "Erreur de vérification du partage.";
+
+            showAuthStatus("Vérification du partage : " + message);
+          }
+        });
       }
 
       showAuthStatus(`Compte connecté. ${projects.length} projet(s) accessible(s). ${rsaStatus}`);

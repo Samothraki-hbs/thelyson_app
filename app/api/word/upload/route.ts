@@ -10,7 +10,7 @@ const MAX_ENCRYPTED_SIZE = MAX_FILE_SIZE + 16;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": WORD_ORIGIN,
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
   "Access-Control-Allow-Headers": "Authorization, Content-Type",
   "Cache-Control": "no-store",
   Vary: "Origin",
@@ -34,6 +34,152 @@ export async function OPTIONS(request: Request) {
     status: 204,
     headers: corsHeaders,
   });
+}
+export async function GET(request: Request) {
+  // 1. Vérifier l'origine du complément Word.
+  const origin = request.headers.get("origin");
+
+  if (origin && origin !== WORD_ORIGIN) {
+    return json({ error: "Origine non autorisée." }, 403);
+  }
+
+  const oauthClientId = process.env.THELYSON_WORD_OAUTH_CLIENT_ID;
+
+  if (!oauthClientId) {
+    return json({ error: "Configuration OAuth Word manquante." }, 500);
+  }
+
+  try {
+    // 2. Vérifier l'identité OAuth Clerk.
+    const clerk = await clerkClient();
+
+    const requestState = await clerk.authenticateRequest(request, {
+      acceptsToken: "oauth_token",
+    });
+
+    if (!requestState.isAuthenticated) {
+      return json({ error: "Connexion requise." }, 401);
+    }
+
+    const identity = requestState.toAuth();
+
+    if (
+      identity.tokenType !== "oauth_token" ||
+      !identity.userId ||
+      identity.clientId !== oauthClientId ||
+      !identity.scopes.includes("profile")
+    ) {
+      return json({ error: "Autorisation Word invalide." }, 401);
+    }
+
+    const userId = identity.userId;
+
+    // 3. Identifier le projet demandé.
+    const projectId = new URL(request.url).searchParams.get("projectId");
+
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (!projectId || !uuidPattern.test(projectId)) {
+      return json({ error: "Identifiant de projet invalide." }, 400);
+    }
+
+    // 4. Accéder à Supabase côté serveur uniquement.
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      return json({ error: "Configuration Supabase manquante." }, 500);
+    }
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    });
+
+    // 5. Vérifier que l'utilisateur appartient au projet.
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("author_id, publisher_id")
+      .eq("id", projectId)
+      .maybeSingle();
+
+    if (projectError) {
+      return json({ error: "Impossible de vérifier le projet." }, 500);
+    }
+
+    if (
+      !project ||
+      (project.author_id !== userId && project.publisher_id !== userId)
+    ) {
+      return json({ error: "Accès au projet refusé." }, 403);
+    }
+
+    // 6. Identifier l'autre membre du projet.
+    const recipientId =
+      project.author_id === userId ? project.publisher_id : project.author_id;
+
+    if (!recipientId || recipientId === userId) {
+      return json({ kind: "no-collaborator" }, 200);
+    }
+
+    // 7. Exiger une invitation réellement acceptée.
+    const { data: invitations, error: invitationError } = await supabase
+      .from("project_invitations")
+      .select("inviter_id, invitee_id")
+      .eq("project_id", projectId)
+      .eq("status", "accepted")
+      .limit(20);
+
+    if (invitationError) {
+      return json({ error: "Impossible de vérifier le consentement." }, 500);
+    }
+
+    const consentConfirmed = (invitations ?? []).some(
+      (invitation) =>
+        (invitation.inviter_id === userId &&
+          invitation.invitee_id === recipientId) ||
+        (invitation.invitee_id === userId &&
+          invitation.inviter_id === recipientId),
+    );
+
+    if (!consentConfirmed) {
+      return json({ kind: "consent-not-confirmed" }, 200);
+    }
+
+    // 8. Récupérer uniquement la clé publique du collaborateur.
+    const { data: recipientIdentity, error: keyError } = await supabase
+      .from("user_crypto_keys")
+      .select("public_key_jwk")
+      .eq("user_id", recipientId)
+      .maybeSingle();
+
+    if (keyError) {
+      return json({ error: "Impossible de vérifier la clé RSA." }, 500);
+    }
+
+    if (!recipientIdentity?.public_key_jwk) {
+      return json({ kind: "collaborator-not-ready" }, 200);
+    }
+
+    // 9. Renvoyer la clé publique au complément Word.
+    // Aucune clé privée ni clé AES en clair.
+    return json(
+      {
+        kind: "ready",
+        recipientId,
+        recipientPublicKeyJwk: recipientIdentity.public_key_jwk,
+      },
+      200,
+    );
+  } catch (error) {
+    console.error("Thélyson Word : vérification du partage", error);
+
+    return json({ error: "Impossible de vérifier le partage." }, 500);
+  }
 }
 
 export async function POST(request: Request) {
