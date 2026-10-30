@@ -134,11 +134,15 @@ type WordEncryptedManuscript = {
   fileHash: string;
   ivBase64: string;
   wrappedKeyBase64: string;
+
+  //Facultatif : même clé AES protégée pour le collaborateur
+  recipientWrappedKeyBase64?: string;
 };
 
 async function preparerManuscritWord(
   documentBytes: Uint8Array,
-  publicKeyJwk: JsonWebKey
+  publicKeyJwk: JsonWebKey,
+  recipientPublicKeyJwk?: JsonWebKey
 ): Promise<WordEncryptedManuscript> {
   // 1. Conserver une copie exacte du document Word.
   const originalBuffer = new ArrayBuffer(documentBytes.byteLength);
@@ -196,6 +200,45 @@ async function preparerManuscritWord(
 
   const wrappedKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(wrappedKey)));
 
+  // Facultatif : protéger la même clé AES pour le collaborateur.
+  let recipientWrappedKeyBase64: string | undefined;
+
+  if (recipientPublicKeyJwk) {
+    if (
+      recipientPublicKeyJwk.kty !== "RSA" ||
+      typeof recipientPublicKeyJwk.n !== "string" ||
+      recipientPublicKeyJwk.e !== "AQAB"
+    ) {
+      throw new Error("La clé publique RSA du collaborateur est invalide.");
+    }
+
+    const recipientPublicKey = await crypto.subtle.importKey(
+      "jwk",
+      recipientPublicKeyJwk,
+      {
+        name: "RSA-OAEP",
+        hash: "SHA-256",
+      },
+      false,
+      ["wrapKey"]
+    );
+
+    const recipientAlgorithm = recipientPublicKey.algorithm as RsaHashedKeyAlgorithm;
+
+    if (recipientAlgorithm.modulusLength !== 3072) {
+      throw new Error("La clé RSA du collaborateur n'a pas la longueur attendue.");
+    }
+
+    const recipientWrappedKey = await crypto.subtle.wrapKey(
+      "raw",
+      aesKey,
+      recipientPublicKey,
+      "RSA-OAEP"
+    );
+
+    recipientWrappedKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(recipientWrappedKey)));
+  }
+
   // 9. Préparer le fichier chiffré.
   const encryptedBlob = new Blob([encryptedBuffer], {
     type: "application/octet-stream",
@@ -206,6 +249,7 @@ async function preparerManuscritWord(
     fileHash,
     ivBase64,
     wrappedKeyBase64,
+    recipientWrappedKeyBase64,
   };
 }
 
