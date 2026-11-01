@@ -3,6 +3,7 @@
 const devCerts = require("office-addin-dev-certs");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
+const webpack = require("webpack");
 
 const urlDev = "https://localhost:3000/";
 const urlProd = "https://www.contoso.com/"; // CHANGE THIS TO YOUR PRODUCTION DEPLOYMENT LOCATION
@@ -14,6 +15,17 @@ async function getHttpsOptions() {
 
 module.exports = async (env, options) => {
   const dev = options.mode === "development";
+
+  // En développement, conserver notre API locale.
+  // En production, l'adresse est fournie par l'hébergeur.
+  const apiBaseUrl = dev ? "https://localhost:3001" : process.env.THELYSON_API_BASE_URL?.trim();
+
+  if (!apiBaseUrl || !apiBaseUrl.startsWith("https://") || apiBaseUrl.endsWith("/")) {
+    throw new Error(
+      "THELYSON_API_BASE_URL doit contenir une adresse HTTPS " + "sans barre oblique finale."
+    );
+  }
+
   const config = {
     devtool: "source-map",
     entry: {
@@ -33,7 +45,7 @@ module.exports = async (env, options) => {
           test: /\.ts$/,
           exclude: /node_modules/,
           use: {
-            loader: "babel-loader"
+            loader: "babel-loader",
           },
         },
         {
@@ -51,6 +63,9 @@ module.exports = async (env, options) => {
       ],
     },
     plugins: [
+      new webpack.DefinePlugin({
+        _THELYSON_API_BASE_URL_: JSON.stringify(apiBaseUrl),
+      }),
       new HtmlWebpackPlugin({
         filename: "taskpane.html",
         template: "./src/taskpane/taskpane.html",
@@ -87,7 +102,10 @@ module.exports = async (env, options) => {
       },
       server: {
         type: "https",
-        options: env.WEBPACK_BUILD || options.https !== undefined ? options.https : await getHttpsOptions(),
+        options:
+          env.WEBPACK_BUILD || options.https !== undefined
+            ? options.https
+            : await getHttpsOptions(),
       },
       port: process.env.npm_package_config_dev_server_port || 3000,
     },

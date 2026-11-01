@@ -9,6 +9,12 @@
 
 const MAX_DOCUMENT_SIZE = 20 * 1024 * 1024;
 
+// Adresse de l'API Thélyson.
+// Elle sera rendue configurable pour le déploiement.
+// Valeur injectée par Webpack au moment de la compilation.
+declare const __THELYSON_API_BASE_URL__: string;
+
+const THELYSON_API_BASE_URL = __THELYSON_API_BASE_URL__;
 // Récupérer le nom du document, s'il est disponible.
 function getDocumentName(): string {
   const url = Office.context.document.url;
@@ -339,9 +345,11 @@ Office.onReady((info) => {
   // Connexion Clerk depuis Microsoft Word
   // -------------------------------------------
 
-  const CLERK_DEVICE_URL = "https://localhost:3001/api/word/oauth/device";
+  // connexion qui permet de garder le mode local et le mode production
 
-  const CLERK_TOKEN_URL = "https://localhost:3001/api/word/oauth/token";
+  const CLERK_DEVICE_URL = `${THELYSON_API_BASE_URL}/api/word/oauth/device`;
+
+  const CLERK_TOKEN_URL = `${THELYSON_API_BASE_URL}/api/word/oauth/token`;
 
   // Remplacer uniquement par le Client ID PUBLIC
   // de l'application OAuth Thélyson Word.
@@ -377,7 +385,7 @@ Office.onReady((info) => {
       }
     }
     async function chargerProjetsWord(accessToken: string): Promise<void> {
-      const response = await fetch("https://localhost:3001/api/word/projects", {
+      const response = await fetch(`${THELYSON_API_BASE_URL}/api/word/projects`, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -525,7 +533,7 @@ Office.onReady((info) => {
 
           try {
             const response = await fetch(
-              "https://localhost:3001/api/word/upload?projectId=" +
+              `${THELYSON_API_BASE_URL}/api/word/upload?projectId=` +
                 encodeURIComponent(selectedProjectId),
               {
                 method: "GET",
@@ -909,7 +917,7 @@ Office.onReady((info) => {
           // nous n'avons pas reçu un identifiant valide.
           creationProjetIncertaine = titreNouveauProjet;
 
-          const projectResponse = await fetch("https://localhost:3001/api/word/projects", {
+          const projectResponse = await fetch(`${THELYSON_API_BASE_URL}/api/word/projects`, {
             method: "POST",
             headers: {
               Authorization: `Bearer ${token}`,
@@ -976,7 +984,7 @@ Office.onReady((info) => {
       }
 
       const sharingResponse = await fetch(
-        "https://localhost:3001/api/word/upload?projectId=" + encodeURIComponent(projectId),
+        `${THELYSON_API_BASE_URL}/api/word/upload?projectId=` + encodeURIComponent(projectId),
         {
           method: "GET",
           headers: {
@@ -1082,7 +1090,7 @@ Office.onReady((info) => {
       }
 
       // 5. Appeler l'API Word authentifiée.
-      const response = await fetch("https://localhost:3001/api/word/upload", {
+      const response = await fetch(`${THELYSON_API_BASE_URL}/api/word/upload`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
