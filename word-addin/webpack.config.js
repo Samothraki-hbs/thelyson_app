@@ -6,7 +6,10 @@ const HtmlWebpackPlugin = require("html-webpack-plugin");
 const webpack = require("webpack");
 
 const urlDev = "https://localhost:3000/";
-const urlProd = "https://www.contoso.com/"; // CHANGE THIS TO YOUR PRODUCTION DEPLOYMENT LOCATION
+
+// Adresse publique du complément Word.
+// Définie au moment de la compilation de production.
+const urlProd = process.env.THELYSON_WORD_BASE_URL?.trim();
 
 async function getHttpsOptions() {
   const httpsOptions = await devCerts.getHttpsServerOptions();
@@ -15,6 +18,35 @@ async function getHttpsOptions() {
 
 module.exports = async (env, options) => {
   const dev = options.mode === "development";
+
+  // En production, refuser un manifeste sans adresse HTTPS valide.
+  // Le développement local conserve son manifeste localhost.
+  if (!dev) {
+    if (
+      !urlProd ||
+      !urlProd.startsWith("https://") ||
+      !urlProd.endsWith("/") ||
+      urlProd.includes("localhost") ||
+      urlProd.includes("contoso.com")
+    ) {
+      throw new Error(
+        "THELYSON_WORD_BASE_URL doit être une adresse HTTPS publique " +
+          "se terminant par / (exemple : https://word.example.com/)."
+      );
+    }
+
+    const parsedUrl = new URL(urlProd);
+
+    if (
+      parsedUrl.origin + "/" !== urlProd ||
+      parsedUrl.hostname === "127.0.0.1" ||
+      parsedUrl.hostname === "0.0.0.0"
+    ) {
+      throw new Error(
+        "THELYSON_WORD_BASE_URL doit désigner uniquement l'origine HTTPS du complément."
+      );
+    }
+  }
 
   // En développement, conserver notre API locale.
   // En production, l'adresse est fournie par l'hébergeur.
@@ -80,12 +112,32 @@ module.exports = async (env, options) => {
           {
             from: "manifest*.xml",
             to: "[name]" + "[ext]",
+
             transform(content) {
               if (dev) {
+                // Conserver le manifeste de développement inchangé.
                 return content;
-              } else {
-                return content.toString().replace(new RegExp(urlDev, "g"), urlProd);
               }
+
+              const manifest = content.toString();
+
+              return (
+                manifest
+                  // Remplacer les adresses locales du complément Word.
+                  .split(urlDev)
+                  .join(urlProd)
+
+                  // Remplacer l'adresse d'assistance Contoso
+                  // par l'accueil de Thélyson Web (temporairement).
+                  .replace("https://www.contoso.com/help", `${apiBaseUrl}/`)
+
+                  // Autoriser le domaine du site Thélyson
+                  // dans le manifeste Office.
+                  .replace(
+                    "<AppDomain>https://www.contoso.com</AppDomain>",
+                    `<AppDomain>${apiBaseUrl}</AppDomain>`
+                  )
+              );
             },
           },
         ],
