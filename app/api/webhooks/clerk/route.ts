@@ -61,20 +61,16 @@ export async function POST(req: Request) {
 
     const { data, error } = await supabase
       .from("profiles")
-      .upsert(
-        { id },
+      .insert([
         {
-          onConflict: "id",
-          ignoreDuplicates: true,
+          id: id,
         },
-      )
+      ])
       .select();
-    console.log(`Synchronisation du profil : ${fullName} (${id})`);
 
     if (error) {
       console.error("ERREUR SUPABASE EXACTE:", error);
       return new Response("Erreur base de données", { status: 500 });
-      console.log("Profil synchronisé avec Supabase :", data);
     }
 
     console.log("SUCCÈS SUPABASE, ligne insérée :", data);
