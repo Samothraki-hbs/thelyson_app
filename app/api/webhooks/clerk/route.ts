@@ -59,21 +59,20 @@ export async function POST(req: Request) {
 
     // insertion minimaliste dans Supabase, pour laisser l'onboarding ensuite
 
-    const { data, error } = await supabase
-      .from("profiles")
-      .insert([
-        {
-          id: id,
-        },
-      ])
-      .select();
+    const { error } = await supabase.from("profiles").upsert(
+      { id },
+      {
+        onConflict: "id",
+        ignoreDuplicates: true,
+      },
+    );
 
     if (error) {
       console.error("ERREUR SUPABASE EXACTE:", error);
       return new Response("Erreur base de données", { status: 500 });
     }
 
-    console.log("SUCCÈS SUPABASE, ligne insérée :", data);
+    console.log("Profil synchronoisé : ", id);
   }
 
   // 5. Réponse de succès pour Clerk
