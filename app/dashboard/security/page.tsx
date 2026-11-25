@@ -157,9 +157,12 @@ export default function SecurityPage() {
         </section>
 
         <p className="mt-6 text-xs leading-5 text-amber-700">
-          Version de test : les clés privées ne sont pas encore récupérables sur
-          un autre appareil. Ne déposez pas de documents confidentiels tant que
-          le système complet n'est pas validé.
+          Version expérimentale — Important : votre clé privée de déchiffrement
+          est conservée dans ce navigateur. Si vous changez de navigateur ou
+          d'appareil, ou si vous effacez ses données locales, vos manuscrits
+          pourraient devenir définitivement inaccessibles. Orélien ne propose
+          pas encore de récupération des clés. Conservez toujours vos fichiers
+          originaux en dehors de la plateforme.
         </p>
       </div>
     </main>

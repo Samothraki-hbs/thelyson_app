@@ -43,6 +43,7 @@ function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [riskAcknowledged, setRiskAcknowledged] = useState(false);
 
   const [status, setStatus] = useState<Status | null>(null);
 
@@ -54,6 +55,13 @@ function UploadForm() {
     e.preventDefault();
 
     if (!file || !userId || !projectId || isUploading) {
+      return;
+    }
+    if (!riskAcknowledged) {
+      setStatus({
+        type: "error",
+        message: "Veuillez confirmer avoir compris les limites du coffre-fort.",
+      });
       return;
     }
 
@@ -356,9 +364,25 @@ function UploadForm() {
           </p>
         </div>
 
+        <label className="flex items-start gap-3 rounded-lg border border-amber-200 p-4 text-sm text-zinc-700">
+          <input
+            type="checkbox"
+            checked={riskAcknowledged}
+            onChange={(e) => setRiskAcknowledged(e.target.checked)}
+            disabled={isUploading}
+            className="mt-1"
+          />
+          <span>
+            Je comprends que cette version expérimentale du coffre-fort
+            fonctionne sur un seul appareil et navigateur, sans récupération des
+            clés privées perdues. Je conserve une copie indépendante de mes
+            manuscrits originaux.
+          </span>
+        </label>
+
         <button
           type="submit"
-          disabled={!file || isUploading}
+          disabled={!file || isUploading || !riskAcknowledged}
           className="w-full rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
         >
           {isUploading

@@ -25,7 +25,11 @@ function toBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-export default function InviteCollaborator({ projectId }: { projectId: string }) {
+export default function InviteCollaborator({
+  projectId,
+}: {
+  projectId: string;
+}) {
   const router = useRouter();
   const { userId } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
@@ -43,7 +47,10 @@ export default function InviteCollaborator({ projectId }: { projectId: string })
     try {
       // 1. Le serveur valide le destinataire et transmet UNIQUEMENT
       // ses données publiques et les clés AES enveloppées pour A.
-      const preparation = await prepareCollaboratorInvitation(projectId, email.trim());
+      const preparation = await prepareCollaboratorInvitation(
+        projectId,
+        email.trim(),
+      );
       if (!preparation.success) throw new Error(preparation.error);
 
       // 2. La clé privée d'A n'est jamais envoyée au serveur.
@@ -56,7 +63,9 @@ export default function InviteCollaborator({ projectId }: { projectId: string })
         ["wrapKey"],
       );
 
-      setStatus(`Préparation sécurisée de ${preparation.versions.length} version(s)...`);
+      setStatus(
+        `Préparation sécurisée de ${preparation.versions.length} version(s)...`,
+      );
       const keys: PreparedInvitationKey[] = [];
 
       for (const version of preparation.versions) {
@@ -108,8 +117,10 @@ export default function InviteCollaborator({ projectId }: { projectId: string })
 
   if (isAdded) {
     return (
-      <span role="status"
-        className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700">
+      <span
+        role="status"
+        className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700"
+      >
         ✓ Invitation sécurisée en attente
       </span>
     );
@@ -117,8 +128,11 @@ export default function InviteCollaborator({ projectId }: { projectId: string })
 
   if (!isOpen) {
     return (
-      <button type="button" onClick={() => setIsOpen(true)}
-        className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100">
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+      >
         <span aria-hidden="true">+</span> Associer un collaborateur
       </button>
     );
@@ -129,18 +143,33 @@ export default function InviteCollaborator({ projectId }: { projectId: string })
       <label htmlFor={`collaborator-email-${projectId}`} className="sr-only">
         Adresse e-mail du collaborateur
       </label>
-      <input id={`collaborator-email-${projectId}`} type="email" required
-        placeholder="E-mail du collaborateur" value={email}
-        onChange={(event) => setEmail(event.target.value)} disabled={isLoading}
+      <input
+        id={`collaborator-email-${projectId}`}
+        type="email"
+        required
+        placeholder="E-mail du collaborateur"
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+        disabled={isLoading}
         className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-900 outline-none focus:border-zinc-400 disabled:opacity-50 sm:min-w-56"
       />
-      <button type="submit" disabled={isLoading || !email.trim()}
-        className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+      <button
+        type="submit"
+        disabled={isLoading || !email.trim()}
+        className="rounded-lg bg-zinc-900 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+      >
         {isLoading ? "Préparation..." : "Envoyer une invitation"}
       </button>
-      <button type="button" disabled={isLoading} aria-label="Annuler"
-        onClick={() => { setIsOpen(false); setStatus(""); }}
-        className="rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-100">
+      <button
+        type="button"
+        disabled={isLoading}
+        aria-label="Annuler"
+        onClick={() => {
+          setIsOpen(false);
+          setStatus("");
+        }}
+        className="rounded-lg px-3 py-2.5 text-sm text-zinc-400 hover:bg-zinc-100"
+      >
         ✕
       </button>
       {status && (
