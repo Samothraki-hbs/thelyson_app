@@ -500,8 +500,12 @@ export async function POST(request: Request) {
       );
     }
 
-    // 11. Enregistrer la version et la clé AES protégée.
-    // Réutiliser la fonction SQL du dépôt Web.
+    // 11. Enregistrer la version et sa clé AES protégée.
+    // En cas de réponse SQL perdue, rechercher l'enregistrement
+    // réel avant de conclure à un échec.
+
+    let rpcError: unknown = null;
+
     try {
       const { error: saveError } = await supabase.rpc(
         "save_encrypted_version",
@@ -517,52 +521,86 @@ export async function POST(request: Request) {
       );
 
       if (saveError) {
-        throw new Error(saveError.message);
+        throw saveError;
       }
     } catch (error) {
-      console.error("Thélyson Word : enregistrement SQL non confirmé", error);
-
-      // Ne pas supprimer automatiquement le fichier :
-      // une réponse réseau ambiguë pourrait masquer
-      // un enregistrement SQL pourtant réussi.
-      return json(
-        {
-          error:
-            "Le fichier chiffré a été envoyé, mais l'enregistrement " +
-            "de la version n'est pas confirmé. Ne redéposez pas " +
-            "le manuscrit avant vérification.",
-          storagePath,
-          requiresReview: true,
-        },
-        500,
-      );
+      rpcError = error;
+      console.warn("Orélien Word : réponse SQL non confirmée", error);
     }
 
-    // 12. Vérifier que la version existe réellement.
+    // 12. Vérifier l'état réel de la version.
+    // Cette lecture fonctionne même si la réponse RPC a été perdue.
     const { data: savedVersion, error: lookupError } = await supabase
       .from("versions")
-      .select("id")
+      .select("id, file_name, file_hash, encryption_iv, encryption_version")
       .eq("project_id", projectId)
       .eq("storage_path", storagePath)
       .maybeSingle();
 
     if (lookupError || !savedVersion) {
       console.error(
-        "Thélyson Word : version enregistrée mais non vérifiée",
-        lookupError?.message ?? "Version introuvable",
+        "Orélien Word : enregistrement non confirmé",
+        lookupError ?? rpcError,
       );
 
       return json(
         {
           error:
-            "L'enregistrement a été effectué mais sa vérification " +
-            "n'a pas abouti. Ne redéposez pas le manuscrit.",
+            "Le fichier chiffré a été envoyé, mais sa version " +
+            "SQL n'est pas confirmée. Ne redéposez pas " +
+            "le document avant vérification.",
           storagePath,
           requiresReview: true,
         },
         500,
       );
     }
+
+    // Vérifier que la version retrouvée correspond exactement
+    // aux métadonnées de ce dépôt.
+    if (
+      savedVersion.file_name !== fileName ||
+      savedVersion.file_hash !== fileHash ||
+      savedVersion.encryption_iv !== ivBase64 ||
+      savedVersion.encryption_version !== 1
+    ) {
+      return json(
+        {
+          error:
+            "Les métadonnées de la version enregistrée " +
+            "ne correspondent pas à ce dépôt.",
+          storagePath,
+          requiresReview: true,
+        },
+        409,
+      );
+    }
+
+    // Vérifier également la clé AES enveloppée du déposant.
+    const { data: ownAccess, error: accessLookupError } = await supabase
+      .from("version_access_keys")
+      .select("encrypted_key")
+      .eq("version_id", savedVersion.id)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (accessLookupError || ownAccess?.encrypted_key !== wrappedKeyBase64) {
+      return json(
+        {
+          error:
+            "La clé de déchiffrement du déposant " +
+            "n'a pas pu être vérifiée. Ne redéposez pas " +
+            "le document avant contrôle.",
+          storagePath,
+          requiresReview: true,
+        },
+        500,
+      );
+    }
+
+    // La version et la clé sont confirmées :
+    // il est désormais possible de poursuivre le partage
+    // et l'ancrage sans créer un deuxième dépôt.
 
     // Enregistrer l'enveloppe RSA du collaborateur
     // avec la fonction SQL déjà utilisée par Thélyson Web.
