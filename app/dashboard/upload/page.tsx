@@ -241,11 +241,16 @@ function UploadForm() {
           message:
             "Manuscrit chiffré et enregistré. Transaction blockchain transmise. Vous pouvez maintenant tester le téléchargement.",
         });
-      } catch {
+      } catch (error) {
+        console.warn("Échec de l'ancrage blockchain :", error);
+
         setStatus({
           type: "warning",
           message:
-            "Le manuscrit chiffré est enregistré, mais l'ancrage blockchain n'a pas été confirmé. Ne redéposez pas le document : son ancrage devra être vérifié ou relancé.",
+            "Le manuscrit chiffré est enregistré, mais l'ancrage blockchain " +
+            "n'a pas été confirmé : " +
+            (error instanceof Error ? error.message : "Erreur inconnue.") +
+            " Ne redéposez pas ce document.",
         });
       }
     } catch (error: unknown) {

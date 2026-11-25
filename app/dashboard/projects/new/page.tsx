@@ -5,7 +5,10 @@ import { useAuth } from "@clerk/nextjs";
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { addCollaborator } from "@/app/actions/inviteCollaborator";
+import {
+  addCollaborator,
+  prepareCollaboratorInvitation,
+} from "@/app/actions/inviteCollaborator";
 
 type UserRole = "Auteur" | "Editeur";
 
@@ -167,13 +170,37 @@ export default function NewProjectPage() {
         let collaboratorError: string | null = null;
 
         try {
-          const result = await addCollaborator(
+          const email = collaboratorEmail.trim();
+
+          // Ce projet vient d'être créé : il ne contient aucune version.
+          // On vérifie tout de même le collaborateur et sa clé publique RSA
+          // avant de publier l'invitation sécurisée.
+          const preparation = await prepareCollaboratorInvitation(
             newProject.id,
-            collaboratorEmail.trim(),
+            email,
           );
 
-          if (!result.success) {
-            collaboratorError = result.error;
+          if (!preparation.success) {
+            collaboratorError = preparation.error;
+          } else if (preparation.versions.length !== 0) {
+            // Une version a été ajoutée entre la création et l'invitation.
+            // Il faut alors préparer ses clés depuis la page du projet.
+            collaboratorError =
+              "Ce projet contient déjà des versions. Invitez le collaborateur " +
+              "depuis la page du projet pour préparer leurs clés.";
+          } else if (!preparation.recipientPublicKey.n) {
+            collaboratorError = "Clé publique du collaborateur invalide.";
+          } else {
+            const result = await addCollaborator(
+              newProject.id,
+              email,
+              preparation.recipientPublicKey.n,
+              [], // Aucune clé à préparer pour un nouveau projet vide.
+            );
+
+            if (!result.success) {
+              collaboratorError = result.error;
+            }
           }
         } catch {
           collaboratorError =
@@ -471,3 +498,4 @@ export default function NewProjectPage() {
     </main>
   );
 }
+
