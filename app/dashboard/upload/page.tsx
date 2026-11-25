@@ -17,7 +17,10 @@ import {
   registerMyPublicKey,
 } from "@/app/actions/cryptoKeys";
 
-import { saveEncryptedVersion } from "@/app/actions/encryptedVersions";
+import {
+  saveEncryptedVersion,
+  type SaveEncryptedVersionInput,
+} from "@/app/actions/encryptedVersions";
 
 import {
   getDecryptedManuscript,
@@ -43,6 +46,11 @@ function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isRecovering, setIsRecovering] = useState(false);
+
+  const [pendingSave, setPendingSave] =
+    useState<SaveEncryptedVersionInput | null>(null);
+
   const [riskAcknowledged, setRiskAcknowledged] = useState(false);
 
   const [status, setStatus] = useState<Status | null>(null);
@@ -89,6 +97,9 @@ function UploadForm() {
       type: "info",
       message: "Préparation de votre coffre-fort...",
     });
+
+    let storageAttempted = false;
+    let storageConfirmed = false;
 
     try {
       const token = await getToken();
@@ -182,6 +193,8 @@ function UploadForm() {
         message: "Enregistrement du document chiffré...",
       });
 
+      storageAttempted = true;
+
       const { error: uploadError } = await supabase.storage
         .from("manuscripts")
         .upload(storagePath, encryptedBlob, {
@@ -191,21 +204,38 @@ function UploadForm() {
 
       if (uploadError) throw uploadError;
 
-      // 6. Enregistrer la version et sa clé chiffrée.
-      const saved = await saveEncryptedVersion({
+      storageConfirmed = true;
+
+      // Conserver les informations nécessaires à une éventuelle reprise.
+      const saveInput: SaveEncryptedVersionInput = {
         projectId,
         storagePath,
         fileName: file.name,
         fileHash,
         ivBase64,
         wrappedKeyBase64,
-      });
+      };
+
+      setPendingSave(saveInput);
+
+      // 6. Enregistrer la version et sa clé chiffrée.
+      const saved = await saveEncryptedVersion(saveInput);
 
       if (!saved.success) {
-        throw new Error(
-          `${saved.error} Le fichier chiffré a été envoyé, mais son enregistrement n'est pas terminé.`,
-        );
+        setStatus({
+          type: "warning",
+          message:
+            saved.error +
+            " Le fichier .enc est déjà envoyé. " +
+            "Utilisez « Reprendre l'enregistrement » ci-dessous ; " +
+            "ne redéposez pas le document.",
+        });
+
+        return;
       }
+
+      // L'enregistrement est confirmé : la reprise n'est plus nécessaire.
+      setPendingSave(null);
 
       const version: DownloadableVersion = {
         id: saved.versionId,
@@ -265,14 +295,96 @@ function UploadForm() {
       console.error("Erreur de dépôt :", error);
 
       setStatus({
-        type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Impossible de déposer le manuscrit.",
+        type: storageAttempted ? "warning" : "error",
+        message: storageConfirmed
+          ? "Le fichier chiffré a été envoyé, mais " +
+            "l'enregistrement SQL reste incertain. " +
+            "Utilisez « Reprendre l'enregistrement » " +
+            "sans redéposer le document."
+          : storageAttempted
+            ? "L'envoi vers Storage n'a pas été confirmé. " +
+              "Vérifiez le projet et le stockage avant " +
+              "de tenter un autre dépôt."
+            : error instanceof Error
+              ? error.message
+              : "Impossible de déposer le manuscrit.",
       });
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleResumeSave = async () => {
+    if (!pendingSave || !userId || isUploading || isRecovering) {
+      return;
+    }
+
+    const input = pendingSave;
+
+    setIsRecovering(true);
+    setStatus({
+      type: "info",
+      message: "Vérification du dépôt existant...",
+    });
+
+    try {
+      // Aucun nouveau fichier .enc n'est envoyé.
+      const saved = await saveEncryptedVersion(input);
+
+      if (!saved.success) {
+        setStatus({
+          type: "warning",
+          message:
+            saved.error +
+            " Ne renvoyez pas le document : " +
+            "une vérification reste nécessaire.",
+        });
+
+        return;
+      }
+
+      // Reconstituer les informations du document récupéré.
+      setLastVersion({
+        id: saved.versionId,
+        storage_path: input.storagePath,
+        file_name: input.fileName,
+        file_hash: input.fileHash,
+        encryption_iv: input.ivBase64,
+        encryption_version: 1,
+      });
+
+      setPendingSave(null);
+
+      setStatus({
+        type: "warning",
+        message:
+          "Enregistrement confirmé. Le déchiffrement " +
+          "peut être testé. L'ancrage blockchain n'a pas " +
+          "été relancé automatiquement : vérifiez " +
+          "son état séparément.",
+      });
+
+      // Réessayer le partage éventuel avec le collaborateur.
+      try {
+        await syncProjectKeys(input.projectId, userId);
+      } catch (shareError) {
+        console.warn(
+          "Partage des clés à réessayer depuis le projet :",
+          shareError,
+        );
+      }
+    } catch (error) {
+      console.warn("Reprise SQL non confirmée :", error);
+
+      setStatus({
+        type: "warning",
+        message:
+          "Impossible de confirmer le dépôt pour le moment. " +
+          "Gardez cette page ouverte et réessayez " +
+          "sans renvoyer le fichier.",
+      });
+    } finally {
+      setIsRecovering(false);
     }
   };
 
@@ -341,7 +453,7 @@ function UploadForm() {
             id="manuscript-file"
             type="file"
             accept=".pdf,.docx"
-            disabled={isUploading}
+            disabled={isUploading || isRecovering || pendingSave !== null}
             onChange={(e) => {
               setFile(e.target.files?.[0] || null);
               setLastVersion(null);
@@ -382,7 +494,13 @@ function UploadForm() {
 
         <button
           type="submit"
-          disabled={!file || isUploading || !riskAcknowledged}
+          disabled={
+            !file ||
+            isUploading ||
+            isRecovering ||
+            pendingSave !== null ||
+            !riskAcknowledged
+          }
           className="w-full rounded-lg bg-zinc-900 px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:bg-zinc-300"
         >
           {isUploading
@@ -391,7 +509,7 @@ function UploadForm() {
         </button>
       </form>
 
-      {(status || lastVersion) && (
+      {(status || lastVersion || pendingSave) && (
         <div className="space-y-4 border-t border-zinc-100 p-6">
           {status && (
             <div
@@ -409,6 +527,19 @@ function UploadForm() {
             >
               {status.message}
             </div>
+          )}
+
+          {pendingSave && (
+            <button
+              type="button"
+              onClick={handleResumeSave}
+              disabled={isRecovering || isUploading}
+              className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-800 disabled:opacity-50"
+            >
+              {isRecovering
+                ? "Vérification..."
+                : "Reprendre l'enregistrement (sans renvoi du fichier)"}
+            </button>
           )}
 
           {lastVersion && (
