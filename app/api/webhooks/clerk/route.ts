@@ -40,8 +40,11 @@ export async function POST(req: Request) {
       "svix-signature": svix_signature,
     });
 
-    // Sécurité absolue : si verify() ne retourne rien, on parse manuellement le texte brut
-    evt = (verified ? verified : JSON.parse(body)) as WebhookEvent;
+    if (!verified) {
+      throw new Error("Signature du webhook non vérifiée.");
+    }
+
+    evt = verified as WebhookEvent;
   } catch (err) {
     console.error("Erreur de vérification du webhook:", err);
     return new Response("Erreur de vérification cryptographique", {
