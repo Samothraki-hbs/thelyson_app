@@ -34,19 +34,19 @@ export async function POST(req: Request) {
 
   // 3. Vérification cryptographique
   try {
-    const verified = wh.verify(body, {
+    // Lance une exception si la signature ou le timestamp
+    // est invalide. Ne renvoie pas le JSON vérifié.
+    wh.verify(body, {
       "svix-id": svix_id,
       "svix-timestamp": svix_timestamp,
       "svix-signature": svix_signature,
     });
 
-    if (!verified) {
-      throw new Error("Signature du webhook non vérifiée.");
-    }
-
-    evt = verified as WebhookEvent;
+    // Le JSON n'est interprété qu'APRÈS une vérification réussie.
+    evt = JSON.parse(body) as WebhookEvent;
   } catch (err) {
     console.error("Erreur de vérification du webhook:", err);
+
     return new Response("Erreur de vérification cryptographique", {
       status: 400,
     });
